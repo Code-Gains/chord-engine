@@ -85,7 +85,6 @@ struct Vertex {
 
 // holds the resources needed for a mesh
 struct GPUMeshBuffers {
-
     AllocatedBuffer indexBuffer;
     AllocatedBuffer vertexBuffer;
     VkDeviceAddress vertexBufferAddress;
@@ -93,7 +92,8 @@ struct GPUMeshBuffers {
 
 // push constants for our mesh object draws
 struct GPUDrawPushConstants {
-    glm::mat4 worldMatrix;
+    glm::mat4 viewProjection;
+    glm::mat4 model;
     VkDeviceAddress vertexBuffer;
 };
 

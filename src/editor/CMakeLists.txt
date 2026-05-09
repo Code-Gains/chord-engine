@@ -1,5 +1,9 @@
 add_executable(editor
     Editor.cpp
+    EditorUiManager.cpp
+    RegistryViewer.cpp
+    ViewerComponentUi.cpp
+    EntityViewer.cpp
 )
 
 target_compile_definitions(editor PRIVATE

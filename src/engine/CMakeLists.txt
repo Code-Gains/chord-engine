@@ -28,6 +28,7 @@ add_library(engine STATIC
     RenderingSystem.cpp
     CameraSystem.cpp
     PhysicsBody.cpp
+    NameComponent.cpp
 )
 
 

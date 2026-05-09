@@ -90,6 +90,7 @@ namespace Engine {
         glm::mat4 viewProjection;
         VkDeviceAddress vertexBuffer;
         VkDeviceAddress instanceBuffer;
+        uint32_t _pad[2];
     };
 
     // struct InstanceData {

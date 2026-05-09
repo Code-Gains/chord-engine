@@ -138,6 +138,7 @@ void PipelineBuilder::set_cull_mode(VkCullModeFlags cullMode, VkFrontFace frontF
 //> set_multisample
 void PipelineBuilder::set_multisampling_none()
 {
+    _multisampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
     _multisampling.sampleShadingEnable = VK_FALSE;
     // multisampling defaulted to no multisampling (1 sample per pixel)
     _multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;

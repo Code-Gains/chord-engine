@@ -1,0 +1,15 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Debug editor (Windows)",
+      "type": "cppvsdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/build/src/editor/editor.exe",
+      "cwd": "${workspaceFolder}/build/src/editor",
+      "stopAtEntry": false,
+      "console": "integratedTerminal",
+      "preLaunchTask": "build-editor"
+    }
+  ]
+}

@@ -6,6 +6,7 @@
 
 layout(location = 0) out vec3 outPos;
 layout(location = 1) out vec3 outNormal;
+//layout(location = 2)
 
 struct Vertex {
     vec3 position;
@@ -84,7 +85,7 @@ void main() {
     vec3 worldPos = applyTransform(vertex.position, inst.position, inst.rotation, inst.scale);
     gl_Position = PushConstants.viewProjection * vec4(worldPos, 1.0);
     //outColor = vertex.normal;
-    outPos = inst.position;
+    outPos = worldPos;
     //outNormal = applyTransform(vertex.normal, inst.position, inst.rotation, inst.scale);
     //outNormal = rotateByQuat(vertex.normal, inst.rotation);
     mat3 model3x3 = mat3(buildTransform(inst.position, inst.rotation, inst.scale));
