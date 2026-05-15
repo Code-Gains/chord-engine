@@ -1712,21 +1712,6 @@ namespace Engine {
             tempMeshes.begin(),             // start of tempMeshes
             tempMeshes.end()                // end of tempMeshes
         );
-    //     for (auto& meshAsset : _testMeshes) {
-    //     int gap = 5;
-    //     for (int x = 0; x < 100; x++) {
-    //         for (int y = 0; y < 100; y++) {
-    //             for (int z = 0; z < 100; z++) {
-    //                 auto meshEntity = _registry.create();
-    //                 _registry.emplace<MeshComponent>(meshEntity, _testMeshes[0]);
-    //                 auto transform = Transform();
-    //                 transform.position = glm::vec3 {x * gap, y * gap,  z * gap};
-    //                 //transform.scale = glm::vec3 {10.0f, 10.0f, 10.0f};
-    //                 _registry.emplace<Transform>(meshEntity, transform);
-    //             }
-    //         }
-    //     }
-    //    }
 
         // destroy mesh buffers on shutdown
         _mainDeletionQueue.push_function([&]() {
@@ -1872,140 +1857,6 @@ namespace Engine {
         return meshes;
     }
 
-    // std::optional<std::vector<std::shared_ptr<MeshAsset>>> Core::LoadGltfMeshes(Core *engine, std::filesystem::path filePath)
-    // {
-    //     //ENGINE_LOG_INFO("Loading GLTF: %s", filePath);
-
-    //     auto dataResult = fastgltf::GltfDataBuffer::FromPath(filePath);
-    //     if (!dataResult) {
-    //         //ENGINE_LOG_INFO("Failed to load glTF file");
-    //         return std::nullopt;
-    //     }
-    //     fastgltf::GltfDataBuffer data = std::move(dataResult.get());
-
-    //     constexpr auto gltfOptions =
-    //         fastgltf::Options::LoadExternalBuffers;
-
-    //     fastgltf::Asset gltf;
-    //     fastgltf::Parser parser;
-    //     auto load = parser.loadGltfBinary(data, filePath.parent_path(), gltfOptions);
-
-    //     if (load) {
-    //         gltf = std::move(load.get());
-    //     } else {
-    //         //ENGINE_LOG_INFO("Failed to load glTF: %s \n", fastgltf::to_underlying(load.error()));
-    //         return std::nullopt;
-    //     }
-
-    //     std::vector<std::shared_ptr<MeshAsset>> meshes;
-    //     std::vector<uint32_t> indices;
-    //     std::vector<Vertex> vertices;
-
-    //     for (fastgltf::Mesh& mesh : gltf.meshes) {
-    //         MeshAsset newMesh;
-    //         newMesh.name = mesh.name;
-
-    //         // clear the mesh arrays each mesh, we dont want to merge them by error
-    //         indices.clear();
-    //         vertices.clear();
-            
-    //         for (auto&& p : mesh.primitives) {
-    //             GeoSurface newSurface;
-    //             newSurface.startIndex = (uint32_t)indices.size();
-    //             newSurface.count = (uint32_t)gltf.accessors[p.indicesAccessor.value()].count;
-
-    //             size_t initial_vtx = vertices.size();
-    //             // load indexes
-    //             {
-    //                 fastgltf::Accessor& indexaccessor = gltf.accessors[p.indicesAccessor.value()];
-    //                 indices.reserve(indices.size() + indexaccessor.count);
-
-    //                 fastgltf::iterateAccessor<std::uint32_t>(gltf, indexaccessor,
-    //                     [&](std::uint32_t idx) {
-    //                         indices.push_back(idx + initial_vtx);
-    //                     });
-    //             }
-
-    //             // load vertex positions
-    //             {
-    //                 fastgltf::Attribute* positionAttr = p.findAttribute("POSITION");
-    //                 if (!positionAttr) {
-    //                     continue;
-    //                 }
-
-    //                 auto& positionAccessor = gltf.accessors[positionAttr->accessorIndex];
-    //                 vertices.resize(vertices.size() + positionAccessor.count);
-
-    //                 fastgltf::iterateAccessorWithIndex<glm::vec3>(gltf, positionAccessor,
-    //                     [&](glm::vec3 v, size_t index) {
-    //                         Vertex newvtx;
-    //                         newvtx.position = v;
-    //                         newvtx.normal = { 1, 0, 0 };
-    //                         //newvtx.color = glm::vec4 { 1.f };
-    //                         newvtx.uv_x = 0;
-    //                         newvtx.uv_y = 0;
-    //                         vertices[initial_vtx + index] = newvtx;
-    //                     });
-    //             }
-
-    //             // load vertex normals
-    //             auto normalsAttr = p.findAttribute("NORMAL");
-    //             if (normalsAttr) {
-    //                 auto& normalAccessor = gltf.accessors[normalsAttr->accessorIndex];
-
-    //                 fastgltf::iterateAccessorWithIndex<glm::vec3>(gltf, normalAccessor,
-    //                     [&](glm::vec3 v, size_t index) {
-    //                         vertices[initial_vtx + index].normal = v;
-    //                     });
-    //             }
-
-    //              // load UVs
-    //             auto uvsAttr = p.findAttribute("TEXCOORD_0");
-    //             if (uvsAttr) {
-    //                 auto& uvAccessor = gltf.accessors[uvsAttr->accessorIndex];
-
-    //                 fastgltf::iterateAccessorWithIndex<glm::vec2>(gltf, uvAccessor,
-    //                     [&](glm::vec2 v, size_t index) {
-    //                         vertices[initial_vtx + index].uv_x = v.x;
-    //                         vertices[initial_vtx + index].uv_y = v.y;
-    //                     });
-    //             }
-    //             // // load vertex colors
-    //             // auto colorsAttr = p.findAttribute("COLOR_0");
-    //             // if (colorsAttr) {
-    //             //     auto& colorsAccessor = gltf.accessors[colorsAttr->accessorIndex];
-
-    //             //     if (colorsAccessor.type == fastgltf::AccessorType::Vec4) {
-    //             //         fastgltf::iterateAccessorWithIndex<glm::vec4>(gltf, colorsAccessor,
-    //             //             [&](glm::vec4 v, size_t index) {
-    //             //                 vertices[initial_vtx + index].color = v;
-    //             //             });
-    //             //     } else if (colorsAccessor.type == fastgltf::AccessorType::Vec3) {
-    //             //         fastgltf::iterateAccessorWithIndex<glm::vec3>(gltf, colorsAccessor,
-    //             //             [&](glm::vec3 v, size_t index) {
-    //             //                 vertices[initial_vtx + index].color = glm::vec4(v, 1.0f);
-    //             //             });
-    //             //     } else {
-    //             //         //ENGINE_LOG_WARN("Unsupported vertex color type in mesh %s", mesh.name.c_str());
-    //             //     }
-    //             // }
-    //             newMesh.surfaces.push_back(newSurface);
-    //         }
-
-    //         // display the vertex normals
-    //         // constexpr bool OverrideColors = true;
-    //         // if (OverrideColors) {
-    //         //     for (Vertex& vtx : vertices) {
-    //         //         vtx.color = glm::vec4(vtx.normal, 1.f);
-    //         //     }
-    //         // }
-    //         newMesh.meshBuffers = engine->UploadMesh(indices, vertices);
-    //         meshes.emplace_back(std::make_shared<MeshAsset>(std::move(newMesh)));
-
-    //     }
-    //     return meshes;
-    // }
-
     Core::Core()
     {
     }
@@ -2026,8 +1877,6 @@ namespace Engine {
 
         auto inputEntity = _registry.create();
         _registry.emplace<InputState>(inputEntity);
-
-
 
         // Sets up GLFW Window with Vulkan Prerequisites
         InitWindow();
@@ -2112,14 +1961,6 @@ namespace Engine {
             ImGui_ImplGlfw_NewFrame();
             ImGui::NewFrame();
             ImGui::DockSpaceOverViewport(0, ImGui::GetMainViewport(), ImGuiDockNodeFlags_PassthruCentralNode);
-
-            //some imgui UI to test
-            //ImGui::ShowDemoWindow();
-           // ImGui::DockSpaceOverViewport(0, ImGui::GetMainViewport(), ImGuiDockNodeFlags_PassthruCentralNode);
-
-            //make imgui calculate internal draw structures
-            //ImGui::DockSpaceOverViewport(0, ImGui::GetMainViewport(), ImGuiDockNodeFlags_PassthruCentralNode);
-            //ImGui::End();
             DrawUi();
             for (auto& system : _systems) {
                 system->DrawUi();
@@ -2176,10 +2017,6 @@ namespace Engine {
         vkb::destroy_debug_utils_messenger(_instance, _debugMessenger);
         vkDestroyInstance(_instance, nullptr);
         
-
-        _mainDeletionQueue.flush();
-        //vkDestroyShaderModule(_device, computeDrawShader, nullptr);
-
         // 7 shutdown GLFW library
         _window->ShutdownGLFW();
     }

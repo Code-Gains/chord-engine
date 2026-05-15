@@ -861,11 +861,11 @@ void Simulation::InitializeRingsSimulation()
     // CreateOrbitalDisk(rng, 10000, 400.0f, 450.0f, 10.0f, attractorMass);
     // CreateOrbitalDisk(rng, 10000, 500.0f, 550.0f, 10.0f, attractorMass);
 
-    CreateOrbitalDisk(rng, 5000, 50.0f, 70.0f, 10.0f, attractorMass, 0.0f);
-    CreateOrbitalDisk(rng, 10000, 80.0f, 100.0f, 10.0f, attractorMass, 0.0f);
-    CreateOrbitalDisk(rng, 10000, 110.0f, 130.0f, 10.0f, attractorMass, 0.0f);
-    CreateOrbitalDisk(rng, 10000, 140.0f, 160.0f, 10.0f, attractorMass, 0.0f);
-    CreateOrbitalDisk(rng, 10000, 170.0f, 190.0f, 10.0f, attractorMass, 0.0f);
+    CreateOrbitalDisk(rng, 3000, 50.0f, 70.0f, 10.0f, attractorMass, 0.0f);
+    CreateOrbitalDisk(rng, 5000, 80.0f, 100.0f, 10.0f, attractorMass, 0.0f);
+    CreateOrbitalDisk(rng, 5000, 110.0f, 130.0f, 10.0f, attractorMass, 0.0f);
+    CreateOrbitalDisk(rng, 5000, 140.0f, 160.0f, 10.0f, attractorMass, 0.0f);
+    CreateOrbitalDisk(rng, 5000, 170.0f, 190.0f, 10.0f, attractorMass, 0.0f);
     //CreateBalancedParticle(rng, glm::vec3 { 20.0f, 20.0f, 20.0f }, attractorMass);
     // auto particleEntity = _registry.create();
     // _registry.emplace<MeshComponent>(particleEntity, _particleMesh);

@@ -28,10 +28,10 @@ class Simulation : public System {
     std::vector<Transform*> _attractorTransforms;
     std::shared_ptr<MeshAsset> _centerMesh;
     std::shared_ptr<MeshAsset> _particleMesh;
-    SimulationType _currentSimulationType = SimulationType::Cube;
+    SimulationType _currentSimulationType = SimulationType::Rings;
     float _timeScale = 1.0f;
     bool _pulseEnabled = false;
-    float _pulseStrength = 10000.0f;
+    float _pulseStrength = 500.0f;
 
 public:
     Simulation(entt::registry& registry);
