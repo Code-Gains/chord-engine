@@ -1,15 +1,3 @@
-# vk-bootstrap library
-add_library(vkbootstrap STATIC
-    ${vkbootstrap_SOURCE_DIR}/src/VkBootstrap.cpp
-)
-
-target_include_directories(vkbootstrap
-    PUBLIC
-        ${vkbootstrap_SOURCE_DIR}/src
-        ${VulkanSdkDir}/include
-)
-
-
 # Engine library
 add_library(engine STATIC
     Core.cpp
@@ -31,74 +19,81 @@ add_library(engine STATIC
     NameComponent.cpp
 )
 
-
 target_compile_definitions(engine PRIVATE
     $<$<CONFIG:Debug>:DEBUG>
     GLM_FORCE_DEPTH_ZERO_TO_ONE
 )
 
 target_compile_options(engine PRIVATE
-    $<$<CXX_COMPILER_ID:MSVC>:/wd5105>       # disable MSVC specific warning if needed
-    $<$<CXX_COMPILER_ID:Clang>:-Wno-deprecated> # Clang warning suppression
+    $<$<CXX_COMPILER_ID:MSVC>:/wd5105>
+    $<$<CXX_COMPILER_ID:Clang>:-Wno-deprecated>
 )
 
-# Include engine headers + dependencies
 target_include_directories(engine
     PUBLIC
-        ${CMAKE_CURRENT_SOURCE_DIR}     # engine headers
-        ${glfw_SOURCE_DIR}/include      # GLFW headers
-        ${glm_SOURCE_DIR}               # GLM headers
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${glfw_SOURCE_DIR}/include
+        ${glm_SOURCE_DIR}
 )
 
-# Vulkan library (cross-platform)
+# ---------------------
+# glslc shader compiler
+# ---------------------
 if(WIN32)
-    set(VulkanLib "${VulkanSdkDir}/Lib/vulkan-1.lib")
+    set(GLSLC_EXECUTABLE "$ENV{VULKAN_SDK}/Bin/glslc.exe")
 elseif(UNIX)
-    set(VulkanLib "${VulkanSdkDir}/lib/libvulkan.so")
+    set(GLSLC_EXECUTABLE "$ENV{VULKAN_SDK}/bin/glslc")
 endif()
 
-# Link libraries
+if(NOT EXISTS "${GLSLC_EXECUTABLE}")
+    find_program(GLSLC_EXECUTABLE glslc)
+endif()
+
+if(NOT GLSLC_EXECUTABLE)
+    message(FATAL_ERROR "glslc not found. Install Vulkan SDK or make sure glslc is in PATH.")
+endif()
+
+message(STATUS "Using glslc: ${GLSLC_EXECUTABLE}")
+
 target_link_libraries(engine
     PUBLIC
         Vulkan::Vulkan
-        vkbootstrap
+        vk-bootstrap
         glfw
         imgui
         fastgltf
-         EnTT::EnTT
+        EnTT::EnTT
 )
 
-# Get all compute shaders in SHADER_DIR
-file(GLOB ALL_SHADERS
+# ---------------------
+# Shaders
+# ---------------------
+file(GLOB ALL_SHADERS CONFIGURE_DEPENDS
     "${SHADER_DIR}/*.comp"
     "${SHADER_DIR}/*.vert"
     "${SHADER_DIR}/*.frag"
 )
 
-# List to store output SPIR-V files
 set(COMPILED_SHADERS "")
 
 foreach(SHADER_FILE IN LISTS ALL_SHADERS)
-    # Get the file name only (e.g., gradient.comp)
-    get_filename_component(SHADER_NAME ${SHADER_FILE} NAME)
+    get_filename_component(SHADER_NAME "${SHADER_FILE}" NAME)
 
-    # Output SPIR-V path (same folder, same name, .spv)
     set(SPIRV_FILE "${SHADER_DIR}/${SHADER_NAME}.spv")
 
     add_custom_command(
         OUTPUT "${SPIRV_FILE}"
-        COMMAND glslc -c "${SHADER_FILE}" -o "${SPIRV_FILE}"
+        COMMAND "${GLSLC_EXECUTABLE}" "${SHADER_FILE}" -o "${SPIRV_FILE}"
         DEPENDS "${SHADER_FILE}"
         COMMENT "Compiling shader ${SHADER_NAME}"
         VERBATIM
     )
 
-    # Add this SPIR-V file to the list of compiled shaders
     list(APPEND COMPILED_SHADERS "${SPIRV_FILE}")
 endforeach()
 
-# Custom target that builds all shaders
-add_custom_target(engine_shaders ALL DEPENDS ${COMPILED_SHADERS})
+add_custom_target(engine_shaders ALL
+    DEPENDS ${COMPILED_SHADERS}
+)
 
-# Make engine depend on the shaders
 add_dependencies(engine engine_shaders)

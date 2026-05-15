@@ -1,18 +1,22 @@
-# commands to run
-# cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DVulkanSdkDir="C:/VulkanSDK/1.4.335.0"    <-- Win64
-# cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DVulkanSdkDir="$HOME/vulkan-sdk/x86_64"   <-- Linux
-
-# cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DVulkanSdkDir="/$HOME/Development/1.4.341.1"
+# commands to run:
+# Windows:
+# cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DVulkanSdkDir="C:/VulkanSDK/1.4.335.0"
+#
+# Linux:
+# cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DVulkanSdkDir="$HOME/vulkan-sdk/x86_64"
+#
+# Build:
 # cmake --build build --target editor
 
 cmake_minimum_required(VERSION 3.26)
 cmake_policy(VERSION 3.26)
-set(CMAKE_EXPORT_COMPILE_COMMANDS ON) # generates compile_commands.json and allows text editor to see files
+
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
 project(MyVulkanEngine LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-
 
 include(FetchContent)
 
@@ -23,8 +27,20 @@ if(NOT DEFINED VulkanSdkDir)
     message(FATAL_ERROR "You must set -DVulkanSdkDir=<path to VulkanSDK>")
 endif()
 
-set(Vulkan_DIR "${VulkanSdkDir}/lib/cmake/Vulkan")
+set(ENV{VULKAN_SDK} "${VulkanSdkDir}")
+
+if(WIN32)
+    set(Vulkan_INCLUDE_DIR "${VulkanSdkDir}/Include")
+    set(Vulkan_LIBRARY "${VulkanSdkDir}/Lib/vulkan-1.lib")
+elseif(UNIX)
+    set(Vulkan_INCLUDE_DIR "${VulkanSdkDir}/include")
+    set(Vulkan_LIBRARY "${VulkanSdkDir}/lib/libvulkan.so")
+endif()
+
 find_package(Vulkan REQUIRED)
+
+message(STATUS "Vulkan include dir: ${Vulkan_INCLUDE_DIR}")
+message(STATUS "Vulkan library: ${Vulkan_LIBRARY}")
 
 # ---------------------
 # GLFW
@@ -59,8 +75,6 @@ FetchContent_MakeAvailable(vkbootstrap)
 # ---------------------
 # ImGui
 # ---------------------
-include(FetchContent)
-
 FetchContent_Declare(
     imgui
     GIT_REPOSITORY https://github.com/ocornut/imgui.git
@@ -68,14 +82,13 @@ FetchContent_Declare(
     GIT_SHALLOW FALSE
 )
 
-# Manual populate
 FetchContent_GetProperties(imgui)
+
 if(NOT imgui_POPULATED)
     message(STATUS "Cloning ImGui v1.92.6-docking...")
     FetchContent_Populate(imgui)
 endif()
 
-# Define the library manually
 add_library(imgui STATIC
     ${imgui_SOURCE_DIR}/imgui.cpp
     ${imgui_SOURCE_DIR}/imgui_draw.cpp
@@ -104,7 +117,6 @@ FetchContent_Declare(
     GIT_REPOSITORY https://github.com/spnda/fastgltf.git
     GIT_TAG v0.9.0
 )
-
 FetchContent_MakeAvailable(fastgltf)
 
 # ---------------------
@@ -113,10 +125,14 @@ FetchContent_MakeAvailable(fastgltf)
 FetchContent_Declare(
     entt
     GIT_REPOSITORY https://github.com/skypjack/entt.git
-    GIT_TAG v3.13.0 # or latest stable
+    GIT_TAG v3.13.0
 )
-
 FetchContent_MakeAvailable(entt)
+
+# ---------------------
+# Shaders
+# ---------------------
+set(SHADER_DIR "${CMAKE_SOURCE_DIR}/shaders" CACHE PATH "Shader directory")
 
 # ---------------------
 # Add src folders
@@ -124,8 +140,3 @@ FetchContent_MakeAvailable(entt)
 add_subdirectory(src/engine)
 add_subdirectory(src/editor)
 add_subdirectory(src/simulation)
-
-# ---------------------
-# Shaders
-# ---------------------
-set(SHADER_DIR "${CMAKE_SOURCE_DIR}/shaders" CACHE PATH "Shader directory")
