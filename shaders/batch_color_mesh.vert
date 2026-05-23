@@ -6,6 +6,8 @@
 
 layout(location = 0) out vec3 outPos;
 layout(location = 1) out vec3 outNormal;
+layout (location = 2) out vec2 outUV;
+layout(location = 3) out vec4 outTangent;
 //layout(location = 2)
 
 struct Vertex {
@@ -13,6 +15,7 @@ struct Vertex {
     float uv_x;
     vec3 normal;
     float uv_y;
+    vec4 tangent;
     //vec4 color;
 };
 
@@ -90,5 +93,5 @@ void main() {
     //outNormal = rotateByQuat(vertex.normal, inst.rotation);
     mat3 model3x3 = mat3(buildTransform(inst.position, inst.rotation, inst.scale));
     outNormal = normalize(transpose(inverse(model3x3)) * vertex.normal);
-    //outUV = vec2(vertex.uv_x, vertex.uv_y);
+    outUV = vec2(vertex.uv_x, vertex.uv_y);
 }

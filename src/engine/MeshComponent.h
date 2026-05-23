@@ -4,6 +4,7 @@
 struct GeoSurface {
     uint32_t startIndex;
     uint32_t count;
+    MaterialInstance* material = nullptr;
 };
 
 struct MeshAsset {

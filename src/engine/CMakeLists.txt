@@ -13,10 +13,10 @@ add_library(engine STATIC
     Transform.cpp
     InputSystem.cpp
     System.cpp
-    RenderingSystem.cpp
     CameraSystem.cpp
     PhysicsBody.cpp
     NameComponent.cpp
+    SunlightComponent.cpp
 )
 
 target_compile_definitions(engine PRIVATE

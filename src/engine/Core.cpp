@@ -9,16 +9,15 @@ using Clock = std::chrono::high_resolution_clock;
 #include "Transform.h"
 #include "Camera.h"
 #include "CameraSystem.h"
+#include "NameComponent.h"
 
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_vulkan.h>
 
-#include <fastgltf/glm_element_traits.hpp>
-#include <fastgltf/core.hpp>
-#include <fastgltf/tools.hpp>
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb_image_write.h"
+#include "stb_image.h"
 
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wnullability-completeness"
@@ -29,6 +28,7 @@ using Clock = std::chrono::high_resolution_clock;
 
 // ECS PORT
 #include "EcsDebugger.h"
+#include "SunlightComponent.h"
 
 namespace Engine {
 #ifndef NDEBUG
@@ -265,6 +265,9 @@ namespace Engine {
         vkDestroyDescriptorSetLayout(_device, _drawImageDescriptorLayout, nullptr);
         vkDestroyDescriptorSetLayout(_device, _gpuSceneDataDescriptorLayout , nullptr);
         vkDestroyDescriptorSetLayout(_device, _singleImageDescriptorLayout , nullptr);
+        vkDestroyDescriptorSetLayout(_device, _multiImageDescriptorLayout , nullptr);
+        vkDestroyDescriptorSetLayout(_device, _environmentDescriptorLayout , nullptr);
+        vkDestroyDescriptorSetLayout(_device, _skyboxDescriptorLayout , nullptr);
     }
 
     void Core::CreateDrawImages(uint32_t width, uint32_t height)
@@ -340,7 +343,7 @@ namespace Engine {
     void Core::InitPipelines()
     {
         InitBackgroundPipelines();
-        InitTrianglePipeline();
+        //InitTrianglePipeline();
 
         size_t maxInstances = 1000000; // upper bound
         _instanceBuffer = CreateBuffer(
@@ -349,8 +352,10 @@ namespace Engine {
             VMA_MEMORY_USAGE_CPU_TO_GPU
         );
 
+        InitBRDFLUTPipeline();
         InitMeshPipeline();
         InitInstancedMeshPipeline();
+        InitSkyboxPipeline();
     }
 
     void Core::InitBackgroundPipelines()
@@ -441,44 +446,12 @@ namespace Engine {
 
     void Core::InitDescriptors()
     {
-        // //create a descriptor pool that will hold 10 sets with 1 image each
-        // std::vector<DescriptorAllocator::PoolSizeRatio> sizes =
-        // {
-        //     { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1 }
-        // };
-
-        // globalDescriptorAllocator.InitPool(_device, 10, sizes);
-
-        // //make the descriptor set layout for our compute draw
-        // {
-        //     DescriptorLayoutBuilder builder;
-        //     builder.AddBinding(0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);
-        //     _drawImageDescriptorLayout = builder.Build(_device, VK_SHADER_STAGE_COMPUTE_BIT);
-        // }
-
-        // //allocate a descriptor set for our draw image
-        // _drawImageDescriptors = globalDescriptorAllocator.Allocate(_device,_drawImageDescriptorLayout);	
-
-        // VkDescriptorImageInfo imgInfo{};
-        // imgInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-        // imgInfo.imageView = _drawImage.imageView;
-        
-        // VkWriteDescriptorSet drawImageWrite = {};
-        // drawImageWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        // drawImageWrite.pNext = nullptr;
-        
-        // drawImageWrite.dstBinding = 0;
-        // drawImageWrite.dstSet = _drawImageDescriptors;
-        // drawImageWrite.descriptorCount = 1;
-        // drawImageWrite.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-        // drawImageWrite.pImageInfo = &imgInfo;
-
-        // vkUpdateDescriptorSets(_device, 1, &drawImageWrite, 0, nullptr);
-
         // 1. Create the descriptor pool (keep it alive for runtime)
         std::vector<DescriptorAllocator::PoolSizeRatio> sizes = {
-            { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1 }
+            { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1 },
+            { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 4 }
         };
+
         globalDescriptorAllocator.InitPool(_device, 10, sizes);
 
         // 2. Create the descriptor set layout
@@ -488,18 +461,64 @@ namespace Engine {
             _drawImageDescriptorLayout = builder.Build(_device, VK_SHADER_STAGE_COMPUTE_BIT);
         }
 
-        // + add gpu scene data descriptor layout
-        {
-            DescriptorLayoutBuilder builder;
-            builder.AddBinding(0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);
-            _gpuSceneDataDescriptorLayout = builder.Build(_device, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT);
-        }
+        // // + add gpu scene data descriptor layout
+        // {
+        //     DescriptorLayoutBuilder builder;
+        //     builder.AddBinding(0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);
+        //     _gpuSceneDataDescriptorLayout = builder.Build(_device, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT);
+        // }
 
         // +
         {
             DescriptorLayoutBuilder builder;
             builder.AddBinding(0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER);
             _singleImageDescriptorLayout = builder.Build(_device, VK_SHADER_STAGE_FRAGMENT_BIT);
+        }
+        // multiple material textures
+        {
+            DescriptorLayoutBuilder builder;
+
+            builder.AddBinding(0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // base color
+            builder.AddBinding(1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // normal
+            builder.AddBinding(2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // metallic roughness
+            builder.AddBinding(3, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // occlusion
+            builder.AddBinding(4, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // emissive
+
+            _multiImageDescriptorLayout =
+                builder.Build(_device, VK_SHADER_STAGE_FRAGMENT_BIT);
+        }
+        // scene data: set 1
+        {
+            DescriptorLayoutBuilder builder;
+
+            builder.AddBinding(0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);
+
+            _gpuSceneDataDescriptorLayout =
+                builder.Build(
+                    _device,
+                    VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT
+                );
+        }
+        // reflection data: set 2
+        {
+            DescriptorLayoutBuilder builder;
+
+            builder.AddBinding(0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // irradiance later
+            builder.AddBinding(1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // prefiltered/env
+            builder.AddBinding(2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER); // BRDF LUT
+
+            _environmentDescriptorLayout =
+                builder.Build(
+                    _device,
+                    VK_SHADER_STAGE_FRAGMENT_BIT
+                );
+        }
+        { // skybox
+            DescriptorLayoutBuilder builder;
+            builder.AddBinding(0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER);
+
+            _skyboxDescriptorLayout =
+                builder.Build(_device, VK_SHADER_STAGE_FRAGMENT_BIT);
         }
 
         // 3. Allocate the descriptor set
@@ -512,7 +531,7 @@ namespace Engine {
                 { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 3 },
                 { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 3 },
                 { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 3 },
-                { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 4 },
+                { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 32 },
             };
 
             _frames[i]._frameDescriptors = DescriptorAllocatorGrowable{};
@@ -525,14 +544,6 @@ namespace Engine {
 
         // 4. Update descriptor set to point to the current draw image
         UpdateDrawImageDescriptor();
-
-    
-
-        //make sure both the descriptor allocator and the new layout get cleaned up properly
-        // _mainDeletionQueue.push_function([&]() {
-        //     globalDescriptorAllocator.DestroyPool(_device);
-        //     vkDestroyDescriptorSetLayout(_device, _drawImageDescriptorLayout, nullptr);
-        // });
     }
 
     AllocatedBuffer Core::CreateBuffer(size_t allocSize, VkBufferUsageFlags usage, VmaMemoryUsage memoryUsage)
@@ -661,38 +672,112 @@ namespace Engine {
         VkFormat format,
         VkImageUsageFlags usage,
         bool mipmapped,
-        VkSampleCountFlagBits samples) // <-- added
+        VkSampleCountFlagBits samples)
     {
         AllocatedImage newImage;
         newImage.imageFormat = format;
         newImage.imageExtent = size;
 
-        VkImageCreateInfo img_info = vkinit::image_create_info(format, usage, size);
-        img_info.samples = samples; // <-- use MSAA sample count
-
-        if (mipmapped) {
-            img_info.mipLevels = static_cast<uint32_t>(std::floor(std::log2(std::max(size.width, size.height)))) + 1;
+        if (data != nullptr) {
+            usage |= VK_IMAGE_USAGE_TRANSFER_DST_BIT;
         }
 
-        // always allocate images on dedicated GPU memory
-        VmaAllocationCreateInfo allocinfo = {};
+        VkImageCreateInfo img_info = vkinit::image_create_info(format, usage, size);
+        img_info.samples = samples;
+
+        if (mipmapped) {
+            img_info.mipLevels =
+                static_cast<uint32_t>(
+                    std::floor(std::log2(std::max(size.width, size.height)))
+                ) + 1;
+        } else {
+            img_info.mipLevels = 1;
+        }
+
+        VmaAllocationCreateInfo allocinfo{};
         allocinfo.usage = VMA_MEMORY_USAGE_GPU_ONLY;
         allocinfo.requiredFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
 
-        // allocate and create the image
-        VK_CHECK(vmaCreateImage(_allocator, &img_info, &allocinfo, &newImage.image, &newImage.allocation, nullptr));
+        VK_CHECK(vmaCreateImage(
+            _allocator,
+            &img_info,
+            &allocinfo,
+            &newImage.image,
+            &newImage.allocation,
+            nullptr
+        ));
 
-        // select correct aspect
         VkImageAspectFlags aspectFlag = VK_IMAGE_ASPECT_COLOR_BIT;
-        if (format == VK_FORMAT_D32_SFLOAT || format == VK_FORMAT_D32_SFLOAT_S8_UINT || format == VK_FORMAT_D24_UNORM_S8_UINT) {
+        if (format == VK_FORMAT_D32_SFLOAT ||
+            format == VK_FORMAT_D32_SFLOAT_S8_UINT ||
+            format == VK_FORMAT_D24_UNORM_S8_UINT) {
             aspectFlag = VK_IMAGE_ASPECT_DEPTH_BIT;
         }
 
-        // build an image-view
-        VkImageViewCreateInfo view_info = vkinit::imageview_create_info(format, newImage.image, aspectFlag);
+        if (data != nullptr) {
+            const size_t pixelSize = 4; // valid for VK_FORMAT_R8G8B8A8_UNORM
+            const size_t dataSize =
+                size.width * size.height * size.depth * pixelSize;
+
+            AllocatedBuffer uploadBuffer = CreateBuffer(
+                dataSize,
+                VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                VMA_MEMORY_USAGE_CPU_TO_GPU
+            );
+
+            memcpy(uploadBuffer.allocation->GetMappedData(), data, dataSize);
+
+            ImmediateSubmit([&](VkCommandBuffer cmd) {
+                vkutil::transition_image(
+                    cmd,
+                    newImage.image,
+                    VK_IMAGE_LAYOUT_UNDEFINED,
+                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL
+                );
+
+                VkBufferImageCopy copyRegion{};
+                copyRegion.bufferOffset = 0;
+                copyRegion.bufferRowLength = 0;
+                copyRegion.bufferImageHeight = 0;
+
+                copyRegion.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                copyRegion.imageSubresource.mipLevel = 0;
+                copyRegion.imageSubresource.baseArrayLayer = 0;
+                copyRegion.imageSubresource.layerCount = 1;
+
+                copyRegion.imageExtent = size;
+
+                vkCmdCopyBufferToImage(
+                    cmd,
+                    uploadBuffer.buffer,
+                    newImage.image,
+                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                    1,
+                    &copyRegion
+                );
+
+                vkutil::transition_image(
+                    cmd,
+                    newImage.image,
+                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+                );
+            });
+
+            DestroyBuffer(uploadBuffer);
+        }
+
+        VkImageViewCreateInfo view_info =
+            vkinit::imageview_create_info(format, newImage.image, aspectFlag);
+
         view_info.subresourceRange.levelCount = img_info.mipLevels;
 
-        VK_CHECK(vkCreateImageView(_device, &view_info, nullptr, &newImage.imageView));
+        VK_CHECK(vkCreateImageView(
+            _device,
+            &view_info,
+            nullptr,
+            &newImage.imageView
+        ));
 
         return newImage;
     }
@@ -1067,22 +1152,36 @@ namespace Engine {
             projectionMatrix = camera.GetProjectionMatrix();
         }
 
-        static float time = 0;
-        time += 0.00001;
-        
-        static bool firstMouse = true;
-        static double lastX = 0, lastY = 0;
-        double mouseX, mouseY;
-        glfwGetCursorPos(_window->GetNativeHandle(), &mouseX, &mouseY);
-        //UpdateCamera(camera, _window->GetNativeHandle(), time);
-        //UpdateCameraRotation(camera, mouseX, mouseY, lastX, lastY, firstMouse);
-
         //allocate a new uniform buffer for the scene data
         AllocatedBuffer gpuSceneDataBuffer = CreateBuffer(sizeof(GPUSceneData), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU);
         //add it to the deletion queue of this frame so it gets deleted once its been used
         GetCurrentFrame()._deletionQueue.push_function([=, this]() {
             DestroyBuffer(gpuSceneDataBuffer);
         });
+
+        auto sunlightView = _registry.view<SunlightComponent>();
+        if (!sunlightView.empty()) {
+            auto lightEntity = *sunlightView.begin();
+            auto& sunlight = sunlightView.get<SunlightComponent>(lightEntity);
+
+            sceneData.sunlightDirection =
+                glm::vec4(
+                    glm::normalize(sunlight.direction),
+                    sunlight.intensity
+                );
+            sceneData.ambientColor =
+                glm::vec4(
+                    sunlight.color,
+                    sunlight.ambient
+                );
+        }
+
+        auto cameraView = _registry.view<Camera, Transform>();
+        if (cameraView.begin() != cameraView.end()) {
+            auto cameraEntity = *cameraView.begin();
+            auto& transform = cameraView.get<Transform>(cameraEntity);
+            sceneData.cameraPosition = glm::vec4(transform.position, 1.0f);
+        }
 
         //write the buffer
         GPUSceneData* sceneUniformData = (GPUSceneData*)gpuSceneDataBuffer.allocation->GetMappedData();
@@ -1095,8 +1194,6 @@ namespace Engine {
         writer.write_buffer(0, gpuSceneDataBuffer.buffer, sizeof(GPUSceneData), 0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);
         writer.update_set(_device, globalDescriptor);
 
-
-
         //begin a render pass  connected to our draw image
         VkRenderingAttachmentInfo colorAttachment = vkinit::attachment_info(_drawImage.imageView, nullptr, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
         VkRenderingAttachmentInfo depthAttachment = vkinit::depth_attachment_info(_depthImage.imageView, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL);
@@ -1104,10 +1201,8 @@ namespace Engine {
         VkRenderingInfo renderInfo = vkinit::rendering_info(_drawExtent, &colorAttachment, &depthAttachment);
         
         vkCmdBeginRendering(cmd, &renderInfo);
-
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, _trianglePipeline);
-
-        //set dynamic viewport and scissor
+        
+         //set dynamic viewport and scissor
         VkViewport viewport = {};
         viewport.x = 0;
         viewport.y = 0;
@@ -1126,75 +1221,40 @@ namespace Engine {
 
         vkCmdSetScissor(cmd, 0, 1, &scissor);
 
-        //launch a draw command to draw 3 vertices
-        // vkCmdDraw(cmd, 3, 1, 0, 0);
+                vkCmdBindPipeline(
+            cmd,
+            VK_PIPELINE_BIND_POINT_GRAPHICS,
+            _skyboxPipeline
+        );
 
-        // vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, _meshPipeline);
+        glm::mat4 skyboxView = glm::mat4(glm::mat3(viewMatrix));
+        glm::mat4 skyboxVP = projectionMatrix * skyboxView;
 
-        //bind a texture
-        VkDescriptorSet imageSet = GetCurrentFrame()._frameDescriptors.allocate(_device, _singleImageDescriptorLayout);
-        {
-            DescriptorWriter writer;
-            writer.write_image(0, _errorCheckerboardImage.imageView, _defaultSamplerNearest, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER);
-            writer.update_set(_device, imageSet);
-        }
+        vkCmdPushConstants(
+            cmd,
+            _skyboxPipelineLayout,
+            VK_SHADER_STAGE_VERTEX_BIT,
+            0,
+            sizeof(glm::mat4),
+            &skyboxVP
+        );
 
-        // vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, _meshPipelineLayout, 0, 1, &imageSet, 0, nullptr);
+        vkCmdBindDescriptorSets(
+            cmd,
+            VK_PIPELINE_BIND_POINT_GRAPHICS,
+            _skyboxPipelineLayout,
+            0,
+            1,
+            &_skyboxCubemap.descriptorSet,
+            0,
+            nullptr
+        );
 
-        //GPUDrawPushConstants push_constants;
-        // push_constants.worldMatrix = glm::mat4{ 1.f };
-        // push_constants.vertexBuffer = rectangle.vertexBufferAddress;
-
-        // vkCmdPushConstants(cmd, _meshPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(GPUDrawPushConstants), &push_constants);
-        // vkCmdBindIndexBuffer(cmd, rectangle.indexBuffer.buffer, 0, VK_INDEX_TYPE_UINT32);
-
-        //vkCmdDrawIndexed(cmd, 6, 1, 0, 0, 0);
-        
-        //pos2 = glm::rotate(pos2, glm::vec3{0, 0, 0});
-
-
-        // // invert the Y direction on projection matrix so that we are more similar
-        // // to opengl and gltf axis
-
-        //     glm::mat4 projectionx(
-        //     1.0,  0.0,  0.0,  0.0,
-        //     0.0, -1.0,  0.0,  0.0,
-        //     0.0,  0.0,  0.5,  0.0,
-        //     0.0,  0.0,  0.5,  1.0,
-        // );
-        //
-
-        // // ECS Singles Rendering
-        // {
-        //     auto registryView = _registry.view<MeshComponent, Transform>();
-        //     float rotationSpeed = glm::radians(45.0f); // 45/s
-        //     glm::vec3 rotationAxis = glm::vec3(0.0f, 1.0f, 0.0f); // Y-axis
-        //     glm::quat deltaRot = glm::angleAxis(rotationSpeed * _deltaTime, rotationAxis);
-        //     for (auto entity : registryView) {
-                
-        //         auto& meshComponent = registryView.get<MeshComponent>(entity);
-        //         auto& transformComponent = registryView.get<Transform>(entity);
-        //         auto translation = glm::translate(transformComponent.position);
-        //         transformComponent.rotation = deltaRot * transformComponent.rotation;
-        //         glm::mat4 rotationMat = glm::toMat4(transformComponent.rotation);
-
-        //        // push_constants.vertexBuffer = _testMeshes[2]->meshBuffers.vertexBufferAddress;
-        //         push_constants.vertexBuffer = meshComponent.mesh.get()->meshBuffers.vertexBufferAddress;
-        //         push_constants.worldMatrix = projectionMatrix * viewMatrix * translation * rotationMat;
-
-        //         // vkCmdPushConstants(cmd, _meshPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(GPUDrawPushConstants), &push_constants);
-        //         // vkCmdBindIndexBuffer(cmd, meshComponent.mesh.get()->meshBuffers.indexBuffer.buffer, 0, VK_INDEX_TYPE_UINT32);
-        //         // vkCmdDrawIndexed(cmd, meshComponent.mesh.get()->surfaces[0].count, 1, meshComponent.mesh.get()->surfaces[0].startIndex, 0, 0);
-        //         vkCmdPushConstants(cmd, _meshPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(GPUDrawPushConstants), &push_constants);
-        //         vkCmdBindIndexBuffer(cmd, meshComponent.mesh.get()->meshBuffers.indexBuffer.buffer, 0, VK_INDEX_TYPE_UINT32);
-        //         vkCmdDrawIndexed(cmd,  meshComponent.mesh.get()->surfaces[0].count, 1,  meshComponent.mesh.get()->surfaces[0].startIndex, 0, 0);
-        //     }
-        // }
+        vkCmdDraw(cmd, 36, 1, 0, 0);
 
 
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, _instancedMeshPipeline);
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, _instancedMeshPipelineLayout, 0, 1, &imageSet, 0, nullptr);
-        // ECS Singles Rendering
+        // ECS Batch Rendering
         {
             auto t0 = Clock::now();
             //_batches.clear(); // clear previous frame data
@@ -1293,49 +1353,146 @@ namespace Engine {
         }
 
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, _meshPipeline);
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, _meshPipelineLayout, 0, 1, &imageSet, 0, nullptr);
-        // // Single entity rendering
+        vkCmdBindDescriptorSets(
+            cmd,
+            VK_PIPELINE_BIND_POINT_GRAPHICS,
+            _meshPipelineLayout,
+            2,
+            1,
+            &_environmentDescriptorSet,
+            0,
+            nullptr
+        );
+        //vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, _meshPipelineLayout, 0, 1, &imageSet, 0, nullptr);
+        // ECS Singles rendering
         auto registryViewSingles = _registry.view<MeshComponent, Transform, SingleRenderTag>();
 
-          for (auto entity : registryViewSingles) {
-                auto& meshComponent = registryViewSingles.get<MeshComponent>(entity);
-                auto& transformComponent = registryViewSingles.get<Transform>(entity);
-                // TRS Matrix
-                glm::mat4 T = glm::translate(glm::mat4(1.0f), transformComponent.position);
-                glm::mat4 R = glm::mat4_cast(transformComponent.rotation);
-                glm::mat4 S = glm::scale(glm::mat4(1.0f), transformComponent.scale);
+        for (auto entity : registryViewSingles) {
+            auto& meshComponent = registryViewSingles.get<MeshComponent>(entity);
+            auto& transformComponent = registryViewSingles.get<Transform>(entity);
 
-                glm::mat4 model = T * R * S;
+            auto meshAssetPtr = meshComponent.mesh.get();
+            auto& surface = meshAssetPtr->surfaces[0];
+            auto* material = surface.material;
 
-                GPUDrawPushConstants push_constants;
-                auto meshAssetPtr = meshComponent.mesh.get();
-                push_constants.vertexBuffer = meshAssetPtr->meshBuffers.vertexBufferAddress;
-                push_constants.model = model;
-                push_constants.viewProjection = projectionMatrix * viewMatrix;
-                vkCmdPushConstants(cmd, _meshPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(GPUDrawPushConstants), &push_constants);
-                vkCmdBindIndexBuffer(cmd, meshAssetPtr->meshBuffers.indexBuffer.buffer, 0, VK_INDEX_TYPE_UINT32);
-                vkCmdDrawIndexed(cmd, meshAssetPtr->surfaces[0].count, 1, meshAssetPtr->surfaces[0].startIndex, 0, 0);
+            AllocatedImage* baseColor = material ? material->image : nullptr;
+            AllocatedImage* normal = material ? material->normalImage : nullptr;
+            AllocatedImage* metallicRoughness = material ? material->metallicRoughnessImage : nullptr;
+            AllocatedImage* occlusion = material ? material->occlusionImage : nullptr;
+            AllocatedImage* emissive = material ? material->emissionImage : nullptr;
+
+            if (!baseColor) baseColor = &_errorCheckerboardImage;
+            if (!normal) normal = &_errorCheckerboardImage;
+            if (!metallicRoughness) metallicRoughness = &_whiteImage;
+            if (!occlusion) occlusion = &_whiteImage;
+            if (!emissive) emissive = &_blackImage;
+
+            VkDescriptorSet imageSet =
+                GetCurrentFrame()._frameDescriptors.allocate(
+                    _device,
+                    _multiImageDescriptorLayout
+                );
+
+            DescriptorWriter imageWriter;
+            imageWriter.write_image(
+                0,
+                baseColor->imageView,
+                baseColor->sampler != VK_NULL_HANDLE ? baseColor->sampler : _defaultSamplerLinear,
+                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER
+            );
+
+            imageWriter.write_image(
+                1,
+                normal->imageView,
+                normal->sampler != VK_NULL_HANDLE ? normal->sampler : _defaultSamplerLinear,
+                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER
+            );
+
+            imageWriter.write_image(
+                2,
+                metallicRoughness->imageView,
+                metallicRoughness->sampler != VK_NULL_HANDLE ? metallicRoughness->sampler : _defaultSamplerLinear,
+                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER
+            );
+
+            imageWriter.write_image(
+                3,
+                occlusion->imageView,
+                occlusion->sampler != VK_NULL_HANDLE ? occlusion->sampler : _defaultSamplerLinear,
+                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER
+            );
+
+            imageWriter.write_image(
+                4,
+                emissive->imageView,
+                emissive->sampler != VK_NULL_HANDLE ? emissive->sampler : _defaultSamplerLinear,
+                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER
+            );
+
+            imageWriter.update_set(_device, imageSet);
+
+            vkCmdBindDescriptorSets(
+                cmd,
+                VK_PIPELINE_BIND_POINT_GRAPHICS,
+                _meshPipelineLayout,
+                0,
+                1,
+                &imageSet,
+                0,
+                nullptr
+            ); 
+            
+            vkCmdBindDescriptorSets(
+                cmd,
+                VK_PIPELINE_BIND_POINT_GRAPHICS,
+                _meshPipelineLayout,
+                1,
+                1,
+                &globalDescriptor,
+                0,
+                nullptr
+            );
+
+            glm::mat4 T = glm::translate(glm::mat4(1.0f), transformComponent.position);
+            glm::mat4 R = glm::mat4_cast(transformComponent.rotation);
+            glm::mat4 S = glm::scale(glm::mat4(1.0f), transformComponent.scale);
+            glm::mat4 model = T * R * S;
+
+            GPUDrawPushConstants push_constants;
+            push_constants.vertexBuffer = meshAssetPtr->meshBuffers.vertexBufferAddress;
+            push_constants.model = model;
+            push_constants.viewProjection = projectionMatrix * viewMatrix;
+
+            vkCmdPushConstants(
+                cmd,
+                _meshPipelineLayout,
+                VK_SHADER_STAGE_VERTEX_BIT,
+                0,
+                sizeof(GPUDrawPushConstants),
+                &push_constants
+            );
+
+            vkCmdBindIndexBuffer(
+                cmd,
+                meshAssetPtr->meshBuffers.indexBuffer.buffer,
+                0,
+                VK_INDEX_TYPE_UINT32
+            );
+
+            vkCmdDrawIndexed(
+                cmd,
+                surface.count,
+                1,
+                surface.startIndex,
+                0,
+                0
+            );
         }
-       // vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, _meshPipeline);
-        //vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, _meshPipelineLayout, 0, 1, &imageSet, 0, nullptr);
-    //    glm::mat4 pos1 = glm::translate(glm::vec3(1.0f, 1.0f, 1.0f));
-    //     glm::mat4 pos2 = glm::translate(glm::vec3(3.0f, -1.0f, -1.0f));
-
-    //     GPUDrawPushConstants push_constants;
-    //     push_constants.vertexBuffer = _testMeshes[2]->meshBuffers.vertexBufferAddress;
-    //     push_constants.worldMatrix = projectionMatrix * viewMatrix * pos1;
-
-    //     vkCmdPushConstants(cmd, _meshPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(GPUDrawPushConstants), &push_constants);
-    //     vkCmdBindIndexBuffer(cmd, _testMeshes[2]->meshBuffers.indexBuffer.buffer, 0, VK_INDEX_TYPE_UINT32);
-    //     vkCmdDrawIndexed(cmd, _testMeshes[2]->surfaces[0].count, 1, _testMeshes[2]->surfaces[0].startIndex, 0, 0);
-
-
-        // push_constants.worldMatrix = projectionMatrix * viewMatrix * pos2;
-
-
-        // vkCmdPushConstants(cmd, _meshPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(GPUDrawPushConstants), &push_constants);
-        // vkCmdBindIndexBuffer(cmd, _testMeshes[2]->meshBuffers.indexBuffer.buffer, 0, VK_INDEX_TYPE_UINT32);
-        // vkCmdDrawIndexed(cmd, _testMeshes[2]->surfaces[0].count, 1, _testMeshes[2]->surfaces[0].startIndex, 0, 0);
         vkCmdEndRendering(cmd);
     }
 
@@ -1444,65 +1601,67 @@ namespace Engine {
         });
     }
 
-    void Core::InitTrianglePipeline()
-    {
-        VkShaderModule triangleFragShader;
-        if (!vkutil::load_shader_module("../../../shaders/colored_triangle.frag.spv", _device, &triangleFragShader)) {
-            ENGINE_LOG_ERROR("Error when building the triangle fragment shader module");
-        }
+    // void Core::InitTrianglePipeline()
+    // {
+    //     VkShaderModule triangleFragShader;
+    //     if (!vkutil::load_shader_module("../../../shaders/colored_triangle.frag.spv", _device, &triangleFragShader)) {
+    //         ENGINE_LOG_ERROR("Error when building the triangle fragment shader module");
+    //     }
 
-        VkShaderModule triangleVertexShader;
-        if (!vkutil::load_shader_module("../../../shaders/colored_triangle.vert.spv", _device, &triangleVertexShader)) {
-            ENGINE_LOG_ERROR("Error when building the triangle vertex shader module");
-        }
+    //     VkShaderModule triangleVertexShader;
+    //     if (!vkutil::load_shader_module("../../../shaders/colored_triangle.vert.spv", _device, &triangleVertexShader)) {
+    //         ENGINE_LOG_ERROR("Error when building the triangle vertex shader module");
+    //     }
         
-        //build the pipeline layout that controls the inputs/outputs of the shader
-        //we are not using descriptor sets or other systems yet, so no need to use anything other than empty default
-        VkPipelineLayoutCreateInfo pipeline_layout_info = vkinit::pipeline_layout_create_info();
-        VK_CHECK(vkCreatePipelineLayout(_device, &pipeline_layout_info, nullptr, &_trianglePipelineLayout));
+    //     //build the pipeline layout that controls the inputs/outputs of the shader
+    //     //we are not using descriptor sets or other systems yet, so no need to use anything other than empty default
+    //     VkPipelineLayoutCreateInfo pipeline_layout_info = vkinit::pipeline_layout_create_info();
+    //     VK_CHECK(vkCreatePipelineLayout(_device, &pipeline_layout_info, nullptr, &_trianglePipelineLayout));
 
-        PipelineBuilder pipelineBuilder;
+    //     PipelineBuilder pipelineBuilder;
 
-        //use the triangle layout we created
-        pipelineBuilder._pipelineLayout = _trianglePipelineLayout;
-        //connecting the vertex and pixel shaders to the pipeline
-        pipelineBuilder.set_shaders(triangleVertexShader, triangleFragShader);
-        //it will draw triangles
-        pipelineBuilder.set_input_topology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
-        //filled triangles
-        pipelineBuilder.set_polygon_mode(VK_POLYGON_MODE_FILL);
-        //no backface culling
-        pipelineBuilder.set_cull_mode(VK_CULL_MODE_NONE, VK_FRONT_FACE_CLOCKWISE);
-        //no multisampling
-        pipelineBuilder.set_multisampling_none();
+    //     //use the triangle layout we created
+    //     pipelineBuilder._pipelineLayout = _trianglePipelineLayout;
+    //     //connecting the vertex and pixel shaders to the pipeline
+    //     pipelineBuilder.set_shaders(triangleVertexShader, triangleFragShader);
+    //     //it will draw triangles
+    //     pipelineBuilder.set_input_topology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
+    //     //filled triangles
+    //     pipelineBuilder.set_polygon_mode(VK_POLYGON_MODE_FILL);
+    //     //no backface culling
+    //     pipelineBuilder.set_cull_mode(VK_CULL_MODE_NONE, VK_FRONT_FACE_CLOCKWISE);
+    //     //no multisampling
+    //     pipelineBuilder.set_multisampling_none();
         
-        //no blending
-        pipelineBuilder.disable_blending();
-        //pipelineBuilder.enable_blending_additive();
+    //     //no blending
+    //     pipelineBuilder.disable_blending();
+    //     //pipelineBuilder.enable_blending_additive();
 
-        //no depth testing
-        //pipelineBuilder.disable_depthtest();
-        pipelineBuilder.enable_depthtest(true, VK_COMPARE_OP_GREATER_OR_EQUAL);
-        //connect the image format we will draw into, from draw image
+    //     //no depth testing
+    //     //pipelineBuilder.disable_depthtest();
+    //     pipelineBuilder.enable_depthtest(true, VK_COMPARE_OP_GREATER_OR_EQUAL);
+    //     //connect the image format we will draw into, from draw image
 
-        //connect the image format we will draw into, from draw image
-        pipelineBuilder.set_color_attachment_format(_drawImage.imageFormat);
-        pipelineBuilder.set_depth_format(_depthImage.imageFormat);
+    //     //connect the image format we will draw into, from draw image
+    //     pipelineBuilder.set_color_attachment_format(_drawImage.imageFormat);
+    //     pipelineBuilder.set_depth_format(_depthImage.imageFormat);
 
-        //finally build the pipeline
-        _trianglePipeline = pipelineBuilder.build_pipeline(_device);
+    //     //finally build the pipeline
+    //     _trianglePipeline = pipelineBuilder.build_pipeline(_device);
 
-        //clean structures
-        vkDestroyShaderModule(_device, triangleFragShader, nullptr);
-        vkDestroyShaderModule(_device, triangleVertexShader, nullptr);
+    //     //clean structures
+    //     vkDestroyShaderModule(_device, triangleFragShader, nullptr);
+    //     vkDestroyShaderModule(_device, triangleVertexShader, nullptr);
 
-        _mainDeletionQueue.push_function([&]() {
-            vkDestroyPipelineLayout(_device, _trianglePipelineLayout, nullptr);
-            vkDestroyPipeline(_device, _trianglePipeline, nullptr);
-        });
-    }
+    //     _mainDeletionQueue.push_function([&]() {
+    //         vkDestroyPipelineLayout(_device, _trianglePipelineLayout, nullptr);
+    //         vkDestroyPipeline(_device, _trianglePipeline, nullptr);
+    //     });
+    // }
 
     void Core::InitMeshPipeline() {
+        assert(_multiImageDescriptorLayout != VK_NULL_HANDLE);
+        assert(_gpuSceneDataDescriptorLayout != VK_NULL_HANDLE);
         VkShaderModule triangleFragShader;
         if (!vkutil::load_shader_module("../../../shaders/colored_triangle.frag.spv", _device, &triangleFragShader))
             ENGINE_LOG_ERROR("Error when building the triangle fragment shader module");
@@ -1518,12 +1677,17 @@ namespace Engine {
         bufferRange.size = sizeof(GPUDrawPushConstants);
         bufferRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
 
+        VkDescriptorSetLayout setLayouts[] = {
+            _multiImageDescriptorLayout,      // set 0
+            _gpuSceneDataDescriptorLayout,    // set 1
+            _environmentDescriptorLayout      // set 2
+        };
+
         VkPipelineLayoutCreateInfo pipeline_layout_info = vkinit::pipeline_layout_create_info();
         pipeline_layout_info.pPushConstantRanges = &bufferRange;
         pipeline_layout_info.pushConstantRangeCount = 1;
-        pipeline_layout_info.pSetLayouts = &_singleImageDescriptorLayout;
-	    pipeline_layout_info.setLayoutCount = 1;
-
+        pipeline_layout_info.pSetLayouts = setLayouts;
+        pipeline_layout_info.setLayoutCount = 3;
         VK_CHECK(vkCreatePipelineLayout(_device, &pipeline_layout_info, nullptr, &_meshPipelineLayout));
 
         PipelineBuilder pipelineBuilder;
@@ -1564,6 +1728,63 @@ namespace Engine {
         });
     }
 
+    void Core::InitSkyboxPipeline()
+    {
+        VkShaderModule skyboxFragShader;
+        if (!vkutil::load_shader_module("../../../shaders/skybox.frag.spv", _device, &skyboxFragShader))
+            ENGINE_LOG_ERROR("Error when building the skybox fragment shader module");
+
+        VkShaderModule skyboxVertexShader;
+        if (!vkutil::load_shader_module("../../../shaders/skybox.vert.spv", _device, &skyboxVertexShader))
+            ENGINE_LOG_ERROR("Error when building the skybox vertex shader module");
+
+        VkPushConstantRange bufferRange{};
+        bufferRange.offset = 0;
+        bufferRange.size = sizeof(glm::mat4);
+        bufferRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+
+        VkPipelineLayoutCreateInfo pipeline_layout_info =
+            vkinit::pipeline_layout_create_info();
+
+        pipeline_layout_info.pPushConstantRanges = &bufferRange;
+        pipeline_layout_info.pushConstantRangeCount = 1;
+        pipeline_layout_info.pSetLayouts = &_skyboxDescriptorLayout;
+        pipeline_layout_info.setLayoutCount = 1;
+
+        VK_CHECK(vkCreatePipelineLayout(
+            _device,
+            &pipeline_layout_info,
+            nullptr,
+            &_skyboxPipelineLayout
+        ));
+
+        PipelineBuilder pipelineBuilder;
+        pipelineBuilder._pipelineLayout = _skyboxPipelineLayout;
+
+        pipelineBuilder.set_shaders(skyboxVertexShader, skyboxFragShader);
+        pipelineBuilder.set_input_topology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
+        pipelineBuilder.set_polygon_mode(VK_POLYGON_MODE_FILL);
+        pipelineBuilder.set_cull_mode(VK_CULL_MODE_NONE, VK_FRONT_FACE_CLOCKWISE);
+        pipelineBuilder.set_multisampling_none();
+        pipelineBuilder.disable_blending();
+
+        // Skybox: depth test on, but depth write should ideally be off.
+        pipelineBuilder.enable_depthtest(false, VK_COMPARE_OP_GREATER_OR_EQUAL);
+
+        pipelineBuilder.set_color_attachment_format(_drawImage.imageFormat);
+        pipelineBuilder.set_depth_format(_depthImage.imageFormat);
+
+        _skyboxPipeline = pipelineBuilder.build_pipeline(_device);
+
+        vkDestroyShaderModule(_device, skyboxFragShader, nullptr);
+        vkDestroyShaderModule(_device, skyboxVertexShader, nullptr);
+
+        _mainDeletionQueue.push_function([&]() {
+            vkDestroyPipelineLayout(_device, _skyboxPipelineLayout, nullptr);
+            vkDestroyPipeline(_device, _skyboxPipeline, nullptr);
+        });
+    }
+
     void Core::InitInstancedMeshPipeline() {
         VkShaderModule triangleFragShader;
         if (!vkutil::load_shader_module("../../../shaders/colored_triangle.frag.spv", _device, &triangleFragShader))
@@ -1579,11 +1800,17 @@ namespace Engine {
         bufferRange.size = sizeof(BatchDrawPushConstants);
         bufferRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
 
+        VkDescriptorSetLayout setLayouts[] = {
+            _multiImageDescriptorLayout,      // set 0
+            _gpuSceneDataDescriptorLayout,    // set 1
+            _environmentDescriptorLayout      // set 2
+        };
+
         VkPipelineLayoutCreateInfo pipeline_layout_info = vkinit::pipeline_layout_create_info();
         pipeline_layout_info.pPushConstantRanges = &bufferRange;
         pipeline_layout_info.pushConstantRangeCount = 1;
-        pipeline_layout_info.pSetLayouts = &_singleImageDescriptorLayout;
-	    pipeline_layout_info.setLayoutCount = 1;
+	    pipeline_layout_info.pSetLayouts = setLayouts;
+        pipeline_layout_info.setLayoutCount = 3;
 
         VK_CHECK(vkCreatePipelineLayout(_device, &pipeline_layout_info, nullptr, &_instancedMeshPipelineLayout));
 
@@ -1661,7 +1888,7 @@ namespace Engine {
         _greyImage = CreateImage((void*)&grey, VkExtent3D{ 1, 1, 1 }, VK_FORMAT_R8G8B8A8_UNORM,
             VK_IMAGE_USAGE_SAMPLED_BIT);
 
-        uint32_t black = glm::packUnorm4x8(glm::vec4(0, 0, 0, 0));
+        uint32_t black = glm::packUnorm4x8(glm::vec4(0, 0, 0, 1));
         _blackImage = CreateImage((void*)&black, VkExtent3D{ 1, 1, 1 }, VK_FORMAT_R8G8B8A8_UNORM,
             VK_IMAGE_USAGE_SAMPLED_BIT);
 
@@ -1673,8 +1900,21 @@ namespace Engine {
                 pixels[y*16 + x] = ((x % 2) ^ (y % 2)) ? magenta : black;
             }
         }
-        _errorCheckerboardImage = CreateImage(pixels.data(), VkExtent3D{16, 16, 1}, VK_FORMAT_R8G8B8A8_UNORM,
-            VK_IMAGE_USAGE_SAMPLED_BIT);
+        _errorCheckerboardImage = CreateImage(
+            pixels.data(),
+            VkExtent3D{16, 16, 1},
+            VK_FORMAT_R8G8B8A8_UNORM,
+            VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT
+        );
+
+        _brdfLUTImage = CreateImage(
+            nullptr,
+            VkExtent3D{512, 512, 1},
+            VK_FORMAT_R16G16_SFLOAT,
+            VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
+            VK_IMAGE_USAGE_SAMPLED_BIT |
+            VK_IMAGE_USAGE_TRANSFER_DST_BIT
+        );
 
         VkSamplerCreateInfo sampl = {.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
 
@@ -1691,10 +1931,14 @@ namespace Engine {
             vkDestroySampler(_device,_defaultSamplerNearest,nullptr);
             vkDestroySampler(_device,_defaultSamplerLinear,nullptr);
 
+            vkDestroySampler(_device,_skyboxCubemap.sampler,nullptr);
+            vkDestroySampler(_device,_brdfLUTSampler,nullptr);
+
             DestroyImage(_whiteImage);
             DestroyImage(_greyImage);
             DestroyImage(_blackImage);
             DestroyImage(_errorCheckerboardImage);
+            DestroyImage(_brdfLUTImage);
         });
 
 
@@ -1713,12 +1957,154 @@ namespace Engine {
             tempMeshes.end()                // end of tempMeshes
         );
 
-        // destroy mesh buffers on shutdown
+        // Load Cubemap images
+        _skyboxCubemap.image = CreateCubemap({
+            "../../../assets/right.png",
+            "../../../assets/left.png",
+            "../../../assets/top.png",
+            "../../../assets/bottom.png",
+            "../../../assets/front.png",
+            "../../../assets/back.png"
+        });
+
+        std::cout << "Cubemap mip levels: "
+          << _skyboxCubemap.image.mipLevels
+          << "\n";
+
+        VkSamplerCreateInfo cubeSamplerInfo{
+            .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO
+        };
+
+        cubeSamplerInfo.magFilter = VK_FILTER_LINEAR;
+        cubeSamplerInfo.minFilter = VK_FILTER_LINEAR;
+        cubeSamplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+
+        cubeSamplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        cubeSamplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        cubeSamplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+
+        cubeSamplerInfo.minLod = 0.0f;
+        cubeSamplerInfo.maxLod =
+            static_cast<float>(_skyboxCubemap.image.mipLevels);
+
+        cubeSamplerInfo.mipLodBias = 0.0f;
+
+        vkCreateSampler(_device, &cubeSamplerInfo, nullptr, &_skyboxCubemap.sampler);
+
+        VkSamplerCreateInfo brdfSamplerInfo{ .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO };
+        brdfSamplerInfo.magFilter = VK_FILTER_LINEAR;
+        brdfSamplerInfo.minFilter = VK_FILTER_LINEAR;
+        brdfSamplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+        brdfSamplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        brdfSamplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        brdfSamplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        brdfSamplerInfo.minLod = 0.0f;
+        brdfSamplerInfo.maxLod = 1.0f;
+
+        vkCreateSampler(_device, &brdfSamplerInfo, nullptr, &_brdfLUTSampler);
+
+        //_skyboxCubemap.sampler = _defaultSamplerLinear;
+
+        _skyboxCubemap.descriptorSet =
+            globalDescriptorAllocator.Allocate(
+                _device,
+                _skyboxDescriptorLayout
+            );
+
+        DescriptorWriter skyboxWriter;
+        skyboxWriter.write_image(
+            0,
+            _skyboxCubemap.image.imageView,
+            _skyboxCubemap.sampler,
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER
+        );
+        skyboxWriter.update_set(_device, _skyboxCubemap.descriptorSet);
+
         _mainDeletionQueue.push_function([&]() {
-            for (auto& mesh : _testMeshes) {
-                DestroyBuffer(mesh->meshBuffers.vertexBuffer);
-                DestroyBuffer(mesh->meshBuffers.indexBuffer);
-            }
+            DestroyImage(_skyboxCubemap.image);
+        });
+
+        // environment
+        _environmentDescriptorSet =
+        globalDescriptorAllocator.Allocate(
+            _device,
+            _environmentDescriptorLayout
+        );
+
+
+        GenerateBRDFLUT();
+        DescriptorWriter envWriter;
+
+        envWriter.write_image(0, _skyboxCubemap.image.imageView, _skyboxCubemap.sampler,
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER);
+
+        envWriter.write_image(1, _skyboxCubemap.image.imageView, _skyboxCubemap.sampler,
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER);
+        envWriter.write_image(
+            2,
+            _brdfLUTImage.imageView,
+            _brdfLUTSampler,
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER
+        );
+
+        envWriter.update_set(_device, _environmentDescriptorSet);
+    }
+
+    void Core::InitBRDFLUTPipeline()
+    {
+         VkShaderModule fragShader;
+        if (!vkutil::load_shader_module("../../../shaders/brdf_lut.frag.spv", _device, &fragShader)) {
+            ENGINE_LOG_ERROR("Error when building BRDF LUT fragment shader module");
+        }
+
+        VkShaderModule vertShader;
+        if (!vkutil::load_shader_module("../../../shaders/fullscreen_triangle.vert.spv", _device, &vertShader)) {
+            ENGINE_LOG_ERROR("Error when building fullscreen triangle vertex shader module");
+        }
+
+        VkPipelineLayoutCreateInfo pipelineLayoutInfo =
+            vkinit::pipeline_layout_create_info();
+
+        pipelineLayoutInfo.pPushConstantRanges = nullptr;
+        pipelineLayoutInfo.pushConstantRangeCount = 0;
+        pipelineLayoutInfo.pSetLayouts = nullptr;
+        pipelineLayoutInfo.setLayoutCount = 0;
+
+        VK_CHECK(vkCreatePipelineLayout(
+            _device,
+            &pipelineLayoutInfo,
+            nullptr,
+            &_brdfLUTPipelineLayout
+        ));
+
+        PipelineBuilder pipelineBuilder;
+
+        pipelineBuilder._pipelineLayout = _brdfLUTPipelineLayout;
+
+        pipelineBuilder.set_shaders(vertShader, fragShader);
+        pipelineBuilder.set_input_topology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
+        pipelineBuilder.set_polygon_mode(VK_POLYGON_MODE_FILL);
+        pipelineBuilder.set_cull_mode(VK_CULL_MODE_NONE, VK_FRONT_FACE_CLOCKWISE);
+        pipelineBuilder.set_multisampling_none();
+        pipelineBuilder.disable_blending();
+
+        pipelineBuilder.disable_depthtest();
+
+        pipelineBuilder.set_color_attachment_format(VK_FORMAT_R16G16_SFLOAT);
+
+        _brdfLUTPipeline =
+            pipelineBuilder.build_pipeline(_device);
+
+        vkDestroyShaderModule(_device, fragShader, nullptr);
+        vkDestroyShaderModule(_device, vertShader, nullptr);
+
+        _mainDeletionQueue.push_function([&]() {
+            vkDestroyPipelineLayout(_device, _brdfLUTPipelineLayout, nullptr);
+            vkDestroyPipeline(_device, _brdfLUTPipeline, nullptr);
         });
     }
 
@@ -1735,13 +2121,205 @@ namespace Engine {
 
         fastgltf::Asset gltf;
         fastgltf::Parser parser;
-        auto load = parser.loadGltfBinary(data, filePath.parent_path(), gltfOptions);
 
-        if (!load) {
+        auto parentPath = filePath.parent_path();
+        auto extension = filePath.extension().string();
+
+        std::transform(
+            extension.begin(),
+            extension.end(),
+            extension.begin(),
+            [](unsigned char c) { return std::tolower(c); });
+
+        if (extension == ".glb") {
+            auto load = parser.loadGltfBinary(data, parentPath, gltfOptions);
+
+            if (!load) {
+                return std::nullopt;
+            }
+
+            gltf = std::move(load.get());
+        }
+        else if (extension == ".gltf") {
+            auto load = parser.loadGltf(data, parentPath, gltfOptions);
+
+            if (!load) {
+                return std::nullopt;
+            }
+
+            gltf = std::move(load.get());
+        }
+        else {
             return std::nullopt;
         }
+        // Load images
+        _loadedImages.clear();
+        _loadedImages.resize(gltf.images.size());
 
-        gltf = std::move(load.get());
+        std::cout << "Loading glTF images: " << gltf.images.size() << "\n";
+
+        for (size_t i = 0; i < gltf.images.size(); i++) {
+            auto loadedImage = LoadGltfImage(gltf, gltf.images[i]);
+
+            if (loadedImage.has_value()) {
+                _loadedImages[i] =
+                    std::make_shared<AllocatedImage>(loadedImage.value());
+
+                AllocatedImage* imageToDelete = _loadedImages[i].get();
+
+                _mainDeletionQueue.push_function([this, imageToDelete]() {
+                    DestroyImage(*imageToDelete);
+                });
+
+                std::cout << "Loaded image " << i << "\n";
+            }
+        }
+        
+        // end of load images
+
+        // -------------------------
+        // LOAD MATERIALS
+        // -------------------------
+
+        _loadedMaterials.clear();
+        _loadedMaterials.resize(gltf.materials.size());
+
+        for (size_t i = 0; i < gltf.materials.size(); i++) {
+
+            auto& gltfMaterial = gltf.materials[i];
+            auto& material = _loadedMaterials[i];
+
+            // -------------------------
+            // DEFAULTS
+            // -------------------------
+
+            material.image = &_errorCheckerboardImage;
+
+            material.normalImage = &_errorCheckerboardImage;
+
+            material.metallicRoughnessImage = &_whiteImage;
+
+            material.occlusionImage = &_whiteImage;
+
+            material.emissionImage = &_blackImage;
+
+            // -------------------------
+            // BASE COLOR
+            // -------------------------
+
+            if (gltfMaterial.pbrData.baseColorTexture.has_value()) {
+
+                auto textureIndex =
+                    gltfMaterial.pbrData.baseColorTexture.value().textureIndex;
+
+                auto& texture = gltf.textures[textureIndex];
+
+                if (texture.imageIndex.has_value()) {
+
+                    auto imageIndex = texture.imageIndex.value();
+
+                    if (imageIndex < _loadedImages.size()) {
+
+                        material.image =
+                            _loadedImages[imageIndex].get();
+                    }
+                }
+            }
+
+            // -------------------------
+            // NORMAL
+            // -------------------------
+
+            if (gltfMaterial.normalTexture.has_value()) {
+
+                auto textureIndex =
+                    gltfMaterial.normalTexture.value().textureIndex;
+
+                auto& texture = gltf.textures[textureIndex];
+
+                if (texture.imageIndex.has_value()) {
+
+                    auto imageIndex = texture.imageIndex.value();
+
+                    if (imageIndex < _loadedImages.size()) {
+
+                        material.normalImage =
+                            _loadedImages[imageIndex].get();
+                    }
+                }
+            }
+
+            // -------------------------
+            // METALLIC ROUGHNESS
+            // -------------------------
+
+            if (gltfMaterial.pbrData.metallicRoughnessTexture.has_value()) {
+
+                auto textureIndex =
+                    gltfMaterial.pbrData
+                        .metallicRoughnessTexture.value()
+                        .textureIndex;
+
+                auto& texture = gltf.textures[textureIndex];
+
+                if (texture.imageIndex.has_value()) {
+
+                    auto imageIndex = texture.imageIndex.value();
+
+                    if (imageIndex < _loadedImages.size()) {
+
+                        material.metallicRoughnessImage =
+                            _loadedImages[imageIndex].get();
+                    }
+                }
+            }
+
+            // -------------------------
+            // OCCLUSION
+            // -------------------------
+
+            if (gltfMaterial.occlusionTexture.has_value()) {
+
+                auto textureIndex =
+                    gltfMaterial.occlusionTexture.value().textureIndex;
+
+                auto& texture = gltf.textures[textureIndex];
+
+                if (texture.imageIndex.has_value()) {
+
+                    auto imageIndex = texture.imageIndex.value();
+
+                    if (imageIndex < _loadedImages.size()) {
+
+                        material.occlusionImage =
+                            _loadedImages[imageIndex].get();
+                    }
+                }
+            }
+
+            // -------------------------
+            // EMISSIVE
+            // -------------------------
+
+            if (gltfMaterial.emissiveTexture.has_value()) {
+
+                auto textureIndex =
+                    gltfMaterial.emissiveTexture.value().textureIndex;
+
+                auto& texture = gltf.textures[textureIndex];
+
+                if (texture.imageIndex.has_value()) {
+
+                    auto imageIndex = texture.imageIndex.value();
+
+                    if (imageIndex < _loadedImages.size()) {
+
+                        material.emissionImage =
+                            _loadedImages[imageIndex].get();
+                    }
+                }
+            }
+        }
 
         std::vector<std::shared_ptr<MeshAsset>> meshes;
 
@@ -1759,7 +2337,11 @@ namespace Engine {
                 }
 
                 GeoSurface newSurface{};
+                bool hasTangents = false;
+                bool hasNormals = false;
+                bool hasUVs = false;
                 newSurface.startIndex = static_cast<uint32_t>(indices.size());
+                newSurface.material = nullptr;
 
                 const auto indexAccessorIndex = p.indicesAccessor.value();
                 auto& indexAccessor = gltf.accessors[indexAccessorIndex];
@@ -1799,6 +2381,8 @@ namespace Engine {
                         v.normal = glm::vec3(1.0f, 0.0f, 0.0f);
                         v.uv_x = 0.0f;
                         v.uv_y = 0.0f;
+                        // test tangent
+                        //v.tangent = glm::vec4(1.0f, 0.0f, 0.0f, 1.0f);
                         vertices[initial_vtx + index] = v;
                     });
 
@@ -1820,13 +2404,16 @@ namespace Engine {
                 if (auto* normalsAttr = p.findAttribute("NORMAL")) {
                     auto& normalAccessor = gltf.accessors[normalsAttr->accessorIndex];
 
-                    if (normalAccessor.type == fastgltf::AccessorType::Vec3) {
+                    if (normalAccessor.type == fastgltf::AccessorType::Vec3 &&
+                        normalAccessor.count == positionAccessor.count) {
+
                         fastgltf::iterateAccessorWithIndex<glm::vec3>(
                             gltf,
                             normalAccessor,
                             [&](glm::vec3 normal, size_t index) {
                                 vertices[initial_vtx + index].normal = normal;
                             });
+                        hasNormals = true;
                     }
                 }
 
@@ -1836,7 +2423,9 @@ namespace Engine {
                 if (auto* uvsAttr = p.findAttribute("TEXCOORD_0")) {
                     auto& uvAccessor = gltf.accessors[uvsAttr->accessorIndex];
 
-                    if (uvAccessor.type == fastgltf::AccessorType::Vec2) {
+                    if (uvAccessor.type == fastgltf::AccessorType::Vec2 &&
+                        uvAccessor.count == positionAccessor.count) {
+
                         fastgltf::iterateAccessorWithIndex<glm::vec2>(
                             gltf,
                             uvAccessor,
@@ -1844,17 +2433,642 @@ namespace Engine {
                                 vertices[initial_vtx + index].uv_x = uv.x;
                                 vertices[initial_vtx + index].uv_y = uv.y;
                             });
+                        hasUVs = true;
                     }
+                }
+                // -------------------------
+                // Tangents (optional)
+                // -------------------------
+                if (auto* tangentAttr = p.findAttribute("TANGENT")) {
+                    auto& tangentAccessor = gltf.accessors[tangentAttr->accessorIndex];
+
+                    if (tangentAccessor.type == fastgltf::AccessorType::Vec4 &&
+                        tangentAccessor.count == positionAccessor.count) {
+
+                        fastgltf::iterateAccessorWithIndex<glm::vec4>(
+                            gltf,
+                            tangentAccessor,
+                            [&](glm::vec4 tangent, size_t index) {
+                                vertices[initial_vtx + index].tangent = tangent;
+                            });
+                        hasTangents = true;
+                    }
+                }
+
+                if (p.materialIndex.has_value()) {
+
+                    uint32_t materialIndex = p.materialIndex.value();
+
+                    if (materialIndex < _loadedMaterials.size()) {
+                        newSurface.material =
+                            &_loadedMaterials[materialIndex];
+                    }
+                }
+                if (!hasTangents && hasNormals && hasUVs) {
+                    GenerateTangents(
+                        vertices,
+                        indices,
+                        newSurface.startIndex,
+                        newSurface.count
+                    );
                 }
 
                 newMesh.surfaces.push_back(newSurface);
             }
 
-            newMesh.meshBuffers = engine->UploadMesh(indices, vertices);
-            meshes.emplace_back(std::make_shared<MeshAsset>(std::move(newMesh)));
+            // Prevent uploading empty meshes
+            if (!indices.empty() && !vertices.empty()) {
+                newMesh.meshBuffers = engine->UploadMesh(indices, vertices);
+
+                // push into deletion queue
+                auto vertexBuffer = newMesh.meshBuffers.vertexBuffer;
+                auto indexBuffer = newMesh.meshBuffers.indexBuffer;
+
+                _mainDeletionQueue.push_function([this, vertexBuffer, indexBuffer]() {
+                    DestroyBuffer(vertexBuffer);
+                    DestroyBuffer(indexBuffer);
+                });
+                // push for return
+                meshes.emplace_back(std::make_shared<MeshAsset>(std::move(newMesh)));
+            }
         }
 
         return meshes;
+    }
+
+    // std::optional<AllocatedImage> Core::LoadGltfImage(fastgltf::Asset &asset, fastgltf::Image &image, const std::filesystem::path &parentPath)
+    // {
+    //     return std::optional<AllocatedImage>();
+    // }
+
+    std::optional<AllocatedImage> Core::LoadGltfImage(fastgltf::Asset &asset, fastgltf::Image &image)
+    {
+       AllocatedImage newImage{};
+
+        int width = 0;
+        int height = 0;
+        int channels = 0;
+
+        std::visit(
+            fastgltf::visitor{
+                [](std::monostate&) {},
+
+                [&](fastgltf::sources::URI& filePath) {
+                    if (filePath.fileByteOffset != 0) {
+                        std::cout << "Unsupported image URI byte offset\n";
+                        return;
+                    }
+
+                    if (!filePath.uri.isLocalPath()) {
+                        std::cout << "Unsupported non-local image URI\n";
+                        return;
+                    }
+
+                    std::string path(
+                        filePath.uri.path().begin(),
+                        filePath.uri.path().end()
+                    );
+
+                    unsigned char* data = stbi_load(
+                        path.c_str(),
+                        &width,
+                        &height,
+                        &channels,
+                        STBI_rgb_alpha
+                    );
+
+                    if (!data) {
+                        std::cout << "Failed to load image: " << path << "\n";
+                        return;
+                    }
+
+                    newImage = CreateImage(
+                        data,
+                        VkExtent3D{
+                            static_cast<uint32_t>(width),
+                            static_cast<uint32_t>(height),
+                            1
+                        },
+                        VK_FORMAT_R8G8B8A8_UNORM,
+                        VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT
+                    );
+
+                    stbi_image_free(data);
+                },
+
+                [&](fastgltf::sources::Array& array) {
+                    unsigned char* data = stbi_load_from_memory(
+                        reinterpret_cast<const stbi_uc*>(array.bytes.data()),
+                        static_cast<int>(array.bytes.size()),
+                        &width,
+                        &height,
+                        &channels,
+                        STBI_rgb_alpha
+                    );
+
+                    if (!data) {
+                        std::cout << "Failed to load image from Array\n";
+                        return;
+                    }
+
+                    newImage = CreateImage(
+                        data,
+                        VkExtent3D{
+                            static_cast<uint32_t>(width),
+                            static_cast<uint32_t>(height),
+                            1
+                        },
+                        VK_FORMAT_R8G8B8A8_UNORM,
+                        VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT
+                    );
+
+                    stbi_image_free(data);
+                },
+
+                [&](fastgltf::sources::Vector& vector) {
+                    unsigned char* data = stbi_load_from_memory(
+                        reinterpret_cast<const stbi_uc*>(vector.bytes.data()),
+                        static_cast<int>(vector.bytes.size()),
+                        &width,
+                        &height,
+                        &channels,
+                        STBI_rgb_alpha
+                    );
+
+                    if (!data) {
+                        std::cout << "Failed to load image from Vector\n";
+                        return;
+                    }
+
+                    newImage = CreateImage(
+                        data,
+                        VkExtent3D{
+                            static_cast<uint32_t>(width),
+                            static_cast<uint32_t>(height),
+                            1
+                        },
+                        VK_FORMAT_R8G8B8A8_UNORM,
+                        VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT
+                    );
+
+                    stbi_image_free(data);
+                },
+
+                [&](fastgltf::sources::BufferView& view) {
+                    auto& bufferView = asset.bufferViews[view.bufferViewIndex];
+                    auto& buffer = asset.buffers[bufferView.bufferIndex];
+
+                    std::visit(
+                        fastgltf::visitor{
+                            [](auto&) {},
+
+                            [&](fastgltf::sources::Vector& vector) {
+                                unsigned char* data = stbi_load_from_memory(
+                                    reinterpret_cast<const stbi_uc*>(vector.bytes.data()) + bufferView.byteOffset,
+                                    static_cast<int>(bufferView.byteLength),
+                                    &width,
+                                    &height,
+                                    &channels,
+                                    STBI_rgb_alpha
+                                );
+
+                                if (!data) {
+                                    std::cout << "Failed to load image from BufferView\n";
+                                    return;
+                                }
+
+                                newImage = CreateImage(
+                                    data,
+                                    VkExtent3D{
+                                        static_cast<uint32_t>(width),
+                                        static_cast<uint32_t>(height),
+                                        1
+                                    },
+                                    VK_FORMAT_R8G8B8A8_UNORM,
+                                    VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT
+                                );
+
+                                stbi_image_free(data);
+                            }
+                        },
+                        buffer.data
+                    );
+                },
+
+                [](auto&) {}
+            },
+            image.data
+        );
+
+        if (newImage.image == VK_NULL_HANDLE) {
+            return {};
+        }
+
+        newImage.sampler = _defaultSamplerLinear;
+
+        newImage.imguiDescriptorSet = ImGui_ImplVulkan_AddTexture(
+            newImage.sampler,
+            newImage.imageView,
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+        );
+
+        return newImage;
+    }
+
+    AllocatedImage Core::CreateCubemap(const std::array<std::string, 6>& facePaths)
+    {
+        int width = 0;
+        int height = 0;
+        int channels = 0;
+
+        std::array<stbi_uc*, 6> faces{};
+
+        for (int i = 0; i < 6; i++) {
+            faces[i] = stbi_load(
+                facePaths[i].c_str(),
+                &width,
+                &height,
+                &channels,
+                STBI_rgb_alpha
+            );
+
+            if (!faces[i]) {
+                std::cout << "Failed to load cubemap face: "
+                        << facePaths[i] << "\n";
+            }
+        }
+
+        uint32_t mipLevels = static_cast<uint32_t>(std::floor(std::log2(std::max(width, height)))) + 1;
+
+        VkDeviceSize faceSize = width * height * 4;
+        VkDeviceSize totalSize = faceSize * 6;
+
+        AllocatedBuffer stagingBuffer = CreateBuffer(
+            totalSize,
+            VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+            VMA_MEMORY_USAGE_CPU_TO_GPU
+        );
+
+        void* mappedData = stagingBuffer.allocation->GetMappedData();
+
+        for (int i = 0; i < 6; i++) {
+            memcpy(
+                static_cast<char*>(mappedData) + faceSize * i,
+                faces[i],
+                faceSize
+            );
+        }
+
+        for (int i = 0; i < 6; i++) {
+            stbi_image_free(faces[i]);
+        }
+
+        AllocatedImage cubemap{};
+        cubemap.mipLevels = mipLevels;
+
+        cubemap.imageExtent = {
+            static_cast<uint32_t>(width),
+            static_cast<uint32_t>(height),
+            1
+        };
+
+        cubemap.imageFormat = VK_FORMAT_R8G8B8A8_UNORM;
+
+        VkImageCreateInfo imageInfo{};
+        imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        imageInfo.imageType = VK_IMAGE_TYPE_2D;
+        imageInfo.format = cubemap.imageFormat;
+        imageInfo.extent = cubemap.imageExtent;
+        imageInfo.mipLevels = mipLevels;
+        imageInfo.arrayLayers = 6;
+        imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+        imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+        imageInfo.usage =
+            VK_IMAGE_USAGE_TRANSFER_DST_BIT |
+            VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
+            VK_IMAGE_USAGE_SAMPLED_BIT;
+        imageInfo.flags = VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
+
+        VmaAllocationCreateInfo allocInfo{};
+        allocInfo.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+
+        VK_CHECK(vmaCreateImage(
+            _allocator,
+            &imageInfo,
+            &allocInfo,
+            &cubemap.image,
+            &cubemap.allocation,
+            nullptr
+        ));
+
+        ImmediateSubmit([&](VkCommandBuffer cmd) {
+            VkImageSubresourceRange range{};
+            range.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            range.baseMipLevel = 0;
+            range.levelCount = mipLevels;
+            range.baseArrayLayer = 0;
+            range.layerCount = 6;
+
+            vkutil::transition_image(
+                cmd,
+                cubemap.image,
+                VK_IMAGE_LAYOUT_UNDEFINED,
+                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                range
+            );
+
+            std::array<VkBufferImageCopy, 6> copyRegions{};
+
+            for (uint32_t i = 0; i < 6; i++) {
+                copyRegions[i].bufferOffset = faceSize * i;
+                copyRegions[i].bufferRowLength = 0;
+                copyRegions[i].bufferImageHeight = 0;
+
+                copyRegions[i].imageSubresource.aspectMask =
+                    VK_IMAGE_ASPECT_COLOR_BIT;
+                copyRegions[i].imageSubresource.mipLevel = 0;
+                copyRegions[i].imageSubresource.baseArrayLayer = i;
+                copyRegions[i].imageSubresource.layerCount = 1;
+
+                copyRegions[i].imageExtent = cubemap.imageExtent;
+            }
+
+            vkCmdCopyBufferToImage(
+                cmd,
+                stagingBuffer.buffer,
+                cubemap.image,
+                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                static_cast<uint32_t>(copyRegions.size()),
+                copyRegions.data()
+            );
+            GenerateCubemapMipmaps(
+                cmd,
+                cubemap.image,
+                cubemap.imageExtent.width,
+                cubemap.imageExtent.height,
+                mipLevels
+            );
+
+            // vkutil::transition_image(
+            //     cmd,
+            //     cubemap.image,
+            //     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            //     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            //     range
+            // );
+        });
+
+        DestroyBuffer(stagingBuffer);
+
+        VkImageViewCreateInfo viewInfo{};
+        viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        viewInfo.image = cubemap.image;
+        viewInfo.viewType = VK_IMAGE_VIEW_TYPE_CUBE;
+        viewInfo.format = cubemap.imageFormat;
+
+        viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        viewInfo.subresourceRange.baseMipLevel = 0;
+        viewInfo.subresourceRange.levelCount = mipLevels;
+        viewInfo.subresourceRange.baseArrayLayer = 0;
+        viewInfo.subresourceRange.layerCount = 6;
+
+        VK_CHECK(vkCreateImageView(
+            _device,
+            &viewInfo,
+            nullptr,
+            &cubemap.imageView
+        ));
+        return cubemap;
+    }
+
+    void Core::GenerateCubemapMipmaps(VkCommandBuffer cmd, VkImage image, uint32_t width, uint32_t height, uint32_t mipLevels)
+    {
+         int32_t mipWidth = static_cast<int32_t>(width);
+        int32_t mipHeight = static_cast<int32_t>(height);
+
+        for (uint32_t i = 1; i < mipLevels; i++) {
+
+            VkImageMemoryBarrier2 barrier{};
+            barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+            barrier.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+            barrier.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+            barrier.dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+            barrier.dstAccessMask = VK_ACCESS_2_TRANSFER_READ_BIT;
+            barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+            barrier.image = image;
+
+            barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            barrier.subresourceRange.baseMipLevel = i - 1;
+            barrier.subresourceRange.levelCount = 1;
+            barrier.subresourceRange.baseArrayLayer = 0;
+            barrier.subresourceRange.layerCount = 6;
+
+            VkDependencyInfo depInfo{};
+            depInfo.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+            depInfo.imageMemoryBarrierCount = 1;
+            depInfo.pImageMemoryBarriers = &barrier;
+
+            vkCmdPipelineBarrier2(cmd, &depInfo);
+
+            for (uint32_t face = 0; face < 6; face++) {
+                VkImageBlit2 blit{};
+                blit.sType = VK_STRUCTURE_TYPE_IMAGE_BLIT_2;
+
+                blit.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                blit.srcSubresource.mipLevel = i - 1;
+                blit.srcSubresource.baseArrayLayer = face;
+                blit.srcSubresource.layerCount = 1;
+
+                blit.srcOffsets[0] = {0, 0, 0};
+                blit.srcOffsets[1] = {mipWidth, mipHeight, 1};
+
+                blit.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                blit.dstSubresource.mipLevel = i;
+                blit.dstSubresource.baseArrayLayer = face;
+                blit.dstSubresource.layerCount = 1;
+
+                blit.dstOffsets[0] = {0, 0, 0};
+                blit.dstOffsets[1] = {
+                    mipWidth > 1 ? mipWidth / 2 : 1,
+                    mipHeight > 1 ? mipHeight / 2 : 1,
+                    1
+                };
+
+                VkBlitImageInfo2 blitInfo{};
+                blitInfo.sType = VK_STRUCTURE_TYPE_BLIT_IMAGE_INFO_2;
+                blitInfo.srcImage = image;
+                blitInfo.srcImageLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+                blitInfo.dstImage = image;
+                blitInfo.dstImageLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+                blitInfo.regionCount = 1;
+                blitInfo.pRegions = &blit;
+                blitInfo.filter = VK_FILTER_LINEAR;
+
+                vkCmdBlitImage2(cmd, &blitInfo);
+            }
+
+            barrier.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+            barrier.srcAccessMask = VK_ACCESS_2_TRANSFER_READ_BIT;
+            barrier.dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+            barrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
+            barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+            barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+            vkCmdPipelineBarrier2(cmd, &depInfo);
+
+            mipWidth = mipWidth > 1 ? mipWidth / 2 : 1;
+            mipHeight = mipHeight > 1 ? mipHeight / 2 : 1;
+        }
+
+        VkImageMemoryBarrier2 barrier{};
+        barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+        barrier.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+        barrier.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+        barrier.dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+        barrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
+        barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        barrier.image = image;
+
+        barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        barrier.subresourceRange.baseMipLevel = mipLevels - 1;
+        barrier.subresourceRange.levelCount = 1;
+        barrier.subresourceRange.baseArrayLayer = 0;
+        barrier.subresourceRange.layerCount = 6;
+
+        VkDependencyInfo depInfo{};
+        depInfo.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+        depInfo.imageMemoryBarrierCount = 1;
+        depInfo.pImageMemoryBarriers = &barrier;
+
+        vkCmdPipelineBarrier2(cmd, &depInfo);
+    }
+
+    void Core::GenerateTangents(std::vector<Vertex> &vertices, const std::vector<uint32_t> &indices, uint32_t startIndex, uint32_t indexCount)
+    {
+        std::vector<glm::vec3> tan1(vertices.size(), glm::vec3(0.0f));
+        std::vector<glm::vec3> tan2(vertices.size(), glm::vec3(0.0f));
+
+        for (uint32_t i = startIndex; i + 2 < startIndex + indexCount; i += 3) {
+            uint32_t i0 = indices[i + 0];
+            uint32_t i1 = indices[i + 1];
+            uint32_t i2 = indices[i + 2];
+
+            Vertex& v0 = vertices[i0];
+            Vertex& v1 = vertices[i1];
+            Vertex& v2 = vertices[i2];
+
+            glm::vec3 p0 = v0.position;
+            glm::vec3 p1 = v1.position;
+            glm::vec3 p2 = v2.position;
+
+            glm::vec2 uv0(v0.uv_x, v0.uv_y);
+            glm::vec2 uv1(v1.uv_x, v1.uv_y);
+            glm::vec2 uv2(v2.uv_x, v2.uv_y);
+
+            glm::vec3 e1 = p1 - p0;
+            glm::vec3 e2 = p2 - p0;
+
+            glm::vec2 duv1 = uv1 - uv0;
+            glm::vec2 duv2 = uv2 - uv0;
+
+            float denom = duv1.x * duv2.y - duv2.x * duv1.y;
+            if (std::abs(denom) < 1e-8f)
+                continue;
+
+            float r = 1.0f / denom;
+
+            glm::vec3 tangent =
+                (e1 * duv2.y - e2 * duv1.y) * r;
+
+            glm::vec3 bitangent =
+                (e2 * duv1.x - e1 * duv2.x) * r;
+
+            tan1[i0] += tangent;
+            tan1[i1] += tangent;
+            tan1[i2] += tangent;
+
+            tan2[i0] += bitangent;
+            tan2[i1] += bitangent;
+            tan2[i2] += bitangent;
+        }
+
+        for (uint32_t i = startIndex; i < startIndex + indexCount; i++) {
+            uint32_t vi = indices[i];
+
+            glm::vec3 n = glm::normalize(vertices[vi].normal);
+            glm::vec3 t = tan1[vi];
+
+            // Gram-Schmidt orthogonalize
+            t = glm::normalize(t - n * glm::dot(n, t));
+
+            float handedness =
+                glm::dot(glm::cross(n, t), tan2[vi]) < 0.0f ? -1.0f : 1.0f;
+
+            vertices[vi].tangent = glm::vec4(t, handedness);
+        }
+    }
+
+    void Core::GenerateBRDFLUT()
+    {
+        ImmediateSubmit([&](VkCommandBuffer cmd) {
+        vkutil::transition_image(
+            cmd,
+            _brdfLUTImage.image,
+            VK_IMAGE_LAYOUT_UNDEFINED,
+            VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
+        );
+
+        VkRenderingAttachmentInfo colorAttachment =
+            vkinit::attachment_info(
+                _brdfLUTImage.imageView,
+                nullptr,
+                VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
+            );
+
+        VkRenderingInfo renderInfo =
+            vkinit::rendering_info(
+                VkExtent2D{512, 512},
+                &colorAttachment,
+                nullptr
+            );
+
+        vkCmdBeginRendering(cmd, &renderInfo);
+
+        VkViewport viewport{};
+        viewport.x = 0;
+        viewport.y = 0;
+        viewport.width = 512.0f;
+        viewport.height = 512.0f;
+        viewport.minDepth = 0.0f;
+        viewport.maxDepth = 1.0f;
+
+        vkCmdSetViewport(cmd, 0, 1, &viewport);
+
+        VkRect2D scissor{};
+        scissor.offset = {0, 0};
+        scissor.extent = {512, 512};
+
+        vkCmdSetScissor(cmd, 0, 1, &scissor);
+
+        vkCmdBindPipeline(
+            cmd,
+            VK_PIPELINE_BIND_POINT_GRAPHICS,
+            _brdfLUTPipeline
+        );
+
+        vkCmdDraw(cmd, 3, 1, 0, 0);
+
+        vkCmdEndRendering(cmd);
+
+        vkutil::transition_image(
+            cmd,
+            _brdfLUTImage.image,
+            VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+        );
+    });
     }
 
     Core::Core()
@@ -1874,6 +3088,8 @@ namespace Engine {
         cameraTransform.position = { 0.0f, 0.0f, 10.0f };
         cameraTransform.rotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
         auto& camera = _registry.emplace<Camera>(cameraEntity);
+        auto nameComponent = NameComponent("Camera");
+        _registry.emplace<NameComponent>(cameraEntity, nameComponent);
 
         auto inputEntity = _registry.create();
         _registry.emplace<InputState>(inputEntity);
@@ -1890,7 +3106,7 @@ namespace Engine {
         InitPipelines();
         InitDefaultData();
 
-                //_ecsDebugger = EcsDebugger(&_registry);
+        //_ecsDebugger = EcsDebugger(&_registry);
         _systems.push_back(std::make_unique<EcsDebugger>(_registry));
         _systems.push_back(std::make_unique<InputSystem>(_registry, inputEntity, _window.get()));
         _systems.push_back(std::make_unique<CameraSystem>(_registry));
@@ -1965,6 +3181,33 @@ namespace Engine {
             for (auto& system : _systems) {
                 system->DrawUi();
             }
+            if (ImGui::Begin("Texture Debugger")) {
+
+            for (size_t i = 0; i < _loadedImages.size(); i++) {
+
+                    auto& image = _loadedImages[i];
+
+                    if (!image) {
+                        ImGui::TextDisabled("Texture %zu : null", i);
+                        continue;
+                    }
+
+                    ImGui::Text("Texture %zu", i);
+
+                    ImTextureID id =
+                        reinterpret_cast<ImTextureID>(image->imguiDescriptorSet);
+
+                    if (!id) {
+                        ImGui::TextDisabled("Missing ImGui descriptor");
+                        continue;
+                    }
+
+                    ImGui::Image(id, ImVec2(128.0f, 128.0f));
+                }
+            }
+
+            ImGui::End();
+
             ImGui::Render();
             ImGui::UpdatePlatformWindows();
             ImGui::RenderPlatformWindowsDefault();
@@ -2137,13 +3380,13 @@ namespace Engine {
     //     VkDescriptorSet ds;
     //     VK_CHECK(vkAllocateDescriptorSets(device, &allocInfo, &ds));
 
-    void GLTFMetallic_Roughness::BuildPipelines(Core *engine)
-    {
-    }
+    // void GLTFMetallic_Roughness::BuildPipelines(Core *engine)
+    // {
+    // }
 
-    void GLTFMetallic_Roughness::ClearResources(VkDevice device)
-    {
-    }
+    // void GLTFMetallic_Roughness::ClearResources(VkDevice device)
+    // {
+    // }
 
     ThreadPool::ThreadPool(size_t numThreads)
     {

@@ -30,6 +30,11 @@ struct AllocatedImage {
     VmaAllocation allocation;
     VkExtent3D imageExtent;
     VkFormat imageFormat;
+    uint32_t mipLevels = 1;
+
+    // debugging images
+    VkSampler sampler = VK_NULL_HANDLE;
+    VkDescriptorSet imguiDescriptorSet = VK_NULL_HANDLE;
 };
 
 struct AllocatedBuffer {
@@ -71,6 +76,11 @@ struct MaterialInstance {
     MaterialPipeline* pipeline;
     VkDescriptorSet materialSet;
     MaterialPass passType;
+    AllocatedImage* image = nullptr;
+    AllocatedImage* metallicRoughnessImage = nullptr;
+    AllocatedImage* normalImage = nullptr;
+    AllocatedImage* occlusionImage = nullptr;
+    AllocatedImage* emissionImage = nullptr;
 };
 //< mat_types
 //> vbuf_types
@@ -80,6 +90,7 @@ struct Vertex {
 	float uv_x;
 	glm::vec3 normal;
 	float uv_y;
+    glm::vec4 tangent;
 	//glm::vec4 color;
 };
 

@@ -12,6 +12,9 @@
 #include <glm/gtx/transform.hpp>
 #include <glm/gtc/quaternion.hpp>
 #include <glm/gtx/quaternion.hpp>
+#include <fastgltf/glm_element_traits.hpp>
+#include <fastgltf/core.hpp>
+#include <fastgltf/tools.hpp>
 #include <entt/entt.hpp>
 #include <mutex>
 #include <future>
@@ -34,36 +37,6 @@
 
 namespace Engine {
 
-
-    // struct Camera {
-    //     glm::vec3 position = {0.0f, 0.0f, 5.0f};
-    //     glm::vec3 front    = {0.0f, 0.0f, -1.0f};
-    //     glm::vec3 up       = {0.0f, 1.0f, 0.0f};
-    //     glm::vec3 right    = {1.0f, 0.0f, 0.0f};
-
-    //     float yaw   = -90.f; // looking along -Z
-    //     float pitch = 0.f;
-    //     float speed = 5.0f;  // units/sec
-    //     float sensitivity = 0.1f; // mouse sensitivity
-
-    //     void UpdateVectors() {
-    //         // Calculate front vector from yaw/pitch
-    //         glm::vec3 f;
-    //         f.x = cos(glm::radians(yaw)) * cos(glm::radians(pitch));
-    //         f.y = sin(glm::radians(pitch));
-    //         f.z = sin(glm::radians(yaw)) * cos(glm::radians(pitch));
-    //         front = glm::normalize(f);
-
-    //         // Recalculate right and up
-    //         right = glm::normalize(glm::cross(front, glm::vec3(0.0f, 1.0f, 0.0f)));
-    //         up = glm::normalize(glm::cross(right, front));
-    //     }
-
-    //     glm::mat4 GetViewMatrix() const {
-    //         return glm::lookAt(position, position + front, up);
-    //     }
-    // };
-
     struct RenderObject {
         uint32_t indexCount;
         uint32_t firstIndex;
@@ -80,11 +53,16 @@ namespace Engine {
         VkPipelineLayout layout;
     };
 
-    struct MaterialInstance {
-        MaterialPipeline* pipeline;
-        VkDescriptorSet materialSet;
-        MaterialPass passType;
-    };
+    // struct MaterialInstance {
+    //     MaterialPipeline* pipeline;
+    //     VkDescriptorSet materialSet;
+    //     MaterialPass passType;
+    //     AllocatedImage* image = nullptr;
+    //     AllocatedImage* metallicRoughnessImage = nullptr;
+    //     AllocatedImage* normalImage = nullptr;
+    //     AllocatedImage* occlusionImage = nullptr;
+    //     AllocatedImage* emissionImage = nullptr;
+    // };
 
     struct BatchDrawPushConstants {
         glm::mat4 viewProjection;
@@ -116,12 +94,9 @@ namespace Engine {
     };
 
     struct GPUSceneData {
-        glm::mat4 view;
-        glm::mat4 proj;
-        glm::mat4 viewproj;
+        glm::vec4 cameraPosition;
+        glm::vec4 sunlightDirection;
         glm::vec4 ambientColor;
-        glm::vec4 sunlightDirection; // w for sun power
-        glm::vec4 sunlightColor;
     };
 
     // struct GeoSurface {
@@ -235,37 +210,44 @@ namespace Engine {
     };
     constexpr unsigned int FRAME_OVERLAP = 2; // Swapchain image count? TODO
 
+    struct CubemapAsset {
+        AllocatedImage image;
+        VkSampler sampler = VK_NULL_HANDLE;
+        VkDescriptorSet descriptorSet = VK_NULL_HANDLE;
+        uint32_t mipLevels = 1;
+    };
+
 
     class Core;
-    struct GLTFMetallic_Roughness {
-        MaterialPipeline opaquePipeline;
-        MaterialPipeline transparentPipeline;
+    // struct GLTFMetallic_Roughness {
+    //     MaterialPipeline opaquePipeline;
+    //     MaterialPipeline transparentPipeline;
 
-        VkDescriptorSetLayout materialLayout;
+    //     VkDescriptorSetLayout materialLayout;
 
-        struct MaterialConstants {
-            glm::vec4 colorFactors;
-            glm::vec4 metal_rough_factors;
-            //padding, we need it anyway for uniform buffers
-            glm::vec4 extra[14];
-        };
+    //     struct MaterialConstants {
+    //         glm::vec4 colorFactors;
+    //         glm::vec4 metal_rough_factors;
+    //         //padding, we need it anyway for uniform buffers
+    //         glm::vec4 extra[14];
+    //     };
 
-        struct MaterialResources {
-            AllocatedImage colorImage;
-            VkSampler colorSampler;
-            AllocatedImage metalRoughImage;
-            VkSampler metalRoughSampler;
-            VkBuffer dataBuffer;
-            uint32_t dataBufferOffset;
-        };
+    //     struct MaterialResources {
+    //         AllocatedImage colorImage;
+    //         VkSampler colorSampler;
+    //         AllocatedImage metalRoughImage;
+    //         VkSampler metalRoughSampler;
+    //         VkBuffer dataBuffer;
+    //         uint32_t dataBufferOffset;
+    //     };
 
-        DescriptorWriter writer;
+    //     DescriptorWriter writer;
 
-        void BuildPipelines(Core* engine);
-        void ClearResources(VkDevice device);
+    //     void BuildPipelines(Core* engine);
+    //     void ClearResources(VkDevice device);
 
-        MaterialInstance WriteMaterial(VkDevice device, MaterialPass pass, const MaterialResources& resources, DescriptorAllocatorGrowable& descriptorAllocator);
-    };
+    //     MaterialInstance WriteMaterial(VkDevice device, MaterialPass pass, const MaterialResources& resources, DescriptorAllocatorGrowable& descriptorAllocator);
+    // };
 
 
 class ThreadPool {
@@ -385,7 +367,7 @@ private:
         VkPipelineLayout _trianglePipelineLayout;
         VkPipeline _trianglePipeline;
 
-        void InitTrianglePipeline();
+        //void InitTrianglePipeline();
 
         VkPipelineLayout _instancedMeshPipelineLayout;
         VkPipelineLayout _meshPipelineLayout;
@@ -396,19 +378,25 @@ private:
 
         void InitInstancedMeshPipeline();
         void InitMeshPipeline();
+        void InitSkyboxPipeline();
         void InitDefaultData();
-        std::optional<std::vector<std::shared_ptr<MeshAsset>>> LoadGltfMeshes(Core* engine, std::filesystem::path filePath);
+        void InitBRDFLUTPipeline();
 
 
         AllocatedImage _whiteImage;
         AllocatedImage _blackImage;
         AllocatedImage _greyImage;
         AllocatedImage _errorCheckerboardImage;
+        std::vector<std::shared_ptr<AllocatedImage>> _loadedImages;
 
         VkSampler _defaultSamplerLinear;
         VkSampler _defaultSamplerNearest;
 
         VkDescriptorSetLayout _singleImageDescriptorLayout;
+        VkDescriptorSetLayout _multiImageDescriptorLayout;
+        VkDescriptorSetLayout _environmentDescriptorLayout;
+
+        VkDescriptorSet _environmentDescriptorSet;
 
         //EcsDebugger _ecsDebugger;
         entt::registry _registry;
@@ -432,6 +420,29 @@ private:
         VkExtent2D      _pendingScreenshotExtent { 0, 0 };
         VkSubresourceLayout _pendingScreenshotLayout {};
 
+        std::vector<MaterialInstance> _loadedMaterials;
+        MaterialInstance _defaultMaterial;
+
+        AllocatedImage _skyboxImage;
+        //VkSampler _skyboxSampler = VK_NULL_HANDLE;
+        VkDescriptorSetLayout _skyboxDescriptorLayout = VK_NULL_HANDLE;
+        VkPipelineLayout _skyboxPipelineLayout = VK_NULL_HANDLE;
+        VkPipeline _skyboxPipeline = VK_NULL_HANDLE;
+
+        CubemapAsset _skyboxCubemap;
+        AllocatedImage CreateCubemap(const std::array<std::string, 6>& facePaths);
+
+        void GenerateCubemapMipmaps(VkCommandBuffer cmd, VkImage image, uint32_t width, uint32_t height, uint32_t mipLevels);
+        void GenerateTangents(std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices, uint32_t startIndex, uint32_t indexCount);
+
+        AllocatedImage _brdfLUTImage;
+        VkSampler _brdfLUTSampler = VK_NULL_HANDLE;
+
+        VkPipeline _brdfLUTPipeline = VK_NULL_HANDLE;
+        VkPipelineLayout _brdfLUTPipelineLayout = VK_NULL_HANDLE;
+
+        void GenerateBRDFLUT();
+
     public:
         Core();
         void Init();
@@ -448,13 +459,16 @@ private:
         AllocatedImage _msaaColorImage;
         AllocatedImage _msaaDepthImage;
         AllocatedImage _depthImage;
-        MaterialInstance defaultData;
-        GLTFMetallic_Roughness metalRoughMaterial;
+        //MaterialInstance defaultData;
+        //GLTFMetallic_Roughness metalRoughMaterial;
         // Getters
         entt::registry& GetRegistry();
 
         // TODO think how to structure public private vars
         std::vector<std::shared_ptr<MeshAsset>> _testMeshes;
         std::vector<std::unique_ptr<System>> _systems;
+
+        std::optional<std::vector<std::shared_ptr<MeshAsset>>> LoadGltfMeshes(Core* engine, std::filesystem::path filePath);
+        std::optional<AllocatedImage> LoadGltfImage(fastgltf::Asset& asset, fastgltf::Image& image);
     };
 } // namespace Engine

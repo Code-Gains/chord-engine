@@ -36,4 +36,5 @@ EntityViewer::EntityViewer(entt::registry &registry, RegistryViewer* registryVie
 {
     _componentUis.push_back(std::make_unique<NameComponentUi>());
     _componentUis.push_back(std::make_unique<TransformComponentUi>());
+    _componentUis.push_back(std::make_unique<SunlightComponentUI>());
 }

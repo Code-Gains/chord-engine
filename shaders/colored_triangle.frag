@@ -1,72 +1,231 @@
 #version 460
 
-//shader input
-//layout (location = 0) in vec3 inColor;
-
 layout (location = 0) in vec3 inPos;
 layout (location = 1) in vec3 inNormal;
-//layout (location = 2) out vec3 inColor;
-//layout (location = 2) in vec2 inUV;
+layout (location = 2) in vec2 inUV;
+layout(location = 3) in vec4 inTangent;
 
-//output write
+layout(set = 0, binding = 0) uniform sampler2D colorTexture;
+layout(set = 0, binding = 1) uniform sampler2D normalTexture;
+layout(set = 0, binding = 2) uniform sampler2D metallicRoughnessTexture;
+layout(set = 0, binding = 3) uniform sampler2D occlusionTexture;
+layout(set = 0, binding = 4) uniform sampler2D emissionTexture;
+
+layout(set = 1, binding = 0) uniform SceneData {
+    vec4 cameraPosition;
+    vec4 sunlightDirection; // xyz = direction, w = intensity
+    vec4 ambientColor;
+} sceneData;
+
+layout(set = 2, binding = 0) uniform samplerCube irradianceMap;
+layout(set = 2, binding = 1) uniform samplerCube prefilteredMap;
+layout(set = 2, binding = 2) uniform sampler2D brdfLUT;
+
 layout (location = 0) out vec4 outFragColor;
 
-void main() 
+const float PI = 3.14159265359;
+const float MIN_ROUGHNESS = 0.04;
+
+vec3 fresnelSchlick(vec3 F0, vec3 F90, float VdotH)
 {
-	//return red
-	//outFragColor = vec4(inColor,1.0f);
-	//outFragColor = vec4(inColor * 0.5 + 0.5, 1.0);
-	// vec3 n = inColor * 0.5 + 0.5;
-	// outFragColor = vec4(n, 1.0);
+    return F0 + (F90 - F0) * pow(clamp(1.0 - VdotH, 0.0, 1.0), 5.0);
+}
 
-	// float intensity = 1.0 - length(inColor); // 0 at edges, 1 at center
-	// outFragColor = vec4(vec3(intensity), 1.0);
-	// float dist = length(inPos);
-	// float intensity = 100.0 / (1.0 + dist); // smooth falloff
+float geometricOcclusion(float NdotL, float NdotV, float alphaRoughness)
+{
+    float r = alphaRoughness;
 
-	// outFragColor = vec4(vec3(intensity), 1.0);
+    float attenuationL =
+        2.0 * NdotL /
+        (NdotL + sqrt(r * r + (1.0 - r * r) * (NdotL * NdotL)));
 
-	// vec3 p = inPos;
+    float attenuationV =
+        2.0 * NdotV /
+        (NdotV + sqrt(r * r + (1.0 - r * r) * (NdotV * NdotV)));
 
-    // // --- distance-based glow ---
-    // float dist = length(p);
-    // float intensity = exp(-dist * 0.005); // tweak this
+    return attenuationL * attenuationV;
+}
 
-    // // --- direction-based color (handles negative nicely) ---
-    // vec3 dirColor = abs(normalize(p));
+float microfacetDistribution(float NdotH, float alphaRoughness)
+{
+    float roughnessSq = alphaRoughness * alphaRoughness;
+    float f = (NdotH * roughnessSq - NdotH) * NdotH + 1.0;
+    return roughnessSq / (PI * f * f);
+}
 
-    // // --- soft base color tint (purple/blue space vibe) ---
-    // vec3 baseColor = mix(vec3(0.2, 0.3, 0.8), vec3(0.8, 0.3, 1.0), dirColor);
+vec3 getNormalFromMap()
+{
+    vec3 tangentNormal =
+        texture(normalTexture, inUV).xyz * 2.0 - 1.0;
 
-    // // --- simple lighting from normals ---
-    // vec3 lightDir = normalize(vec3(0.5, 1.0, 0.3));
-    // float lighting = max(dot(normalize(inNormal), lightDir), 0.0);
+    vec3 N = normalize(inNormal);
+    vec3 T = normalize(inTangent.xyz);
 
-    // // --- combine ---
-    // vec3 color = baseColor * intensity;
-    // color += vec3(1.0) * intensity * 0.5; // glow boost
-    // color *= 0.5 + 0.5 * lighting;        // soft shading
+    T = normalize(T - N * dot(N, T));
 
-    // outFragColor = vec4(color, 1.0);
+    vec3 B = cross(N, T) * inTangent.w;
 
-	// vec3 dir = normalize(inPos);
+    mat3 TBN = mat3(T, B, N);
 
-	// // choose a direction (can tweak this!)
-	// vec3 ref = normalize(vec3(1.0, 1.0, 1.0));
+    return normalize(TBN * tangentNormal);
+}
 
-	// float d = dot(dir, ref);        // [-1, 1]
-	// float colorVal = d * 0.5 + 0.5; // [0, 1]
+vec3 ACESFilm(vec3 x)
+{
+    float a = 2.51;
+    float b = 0.03;
+    float c = 2.43;
+    float d = 0.59;
+    float e = 0.14;
 
-	// outFragColor = vec4(vec3(colorVal), 1.0);
-	vec3 lightDir = normalize(-inPos); // from fragment to center
-	vec3 N = normalize(inNormal); // world normal
-	float ambient = 0.005; // small light for shadows
-	float diffuse = max(dot(N, lightDir), 0.0); // standard Lambert
-	float distance = length(inPos);
-	float attenuation = 1.0 / (1.0 + 0.00001 * distance * distance);
-	//float attenuation = 1.0 / (1.0 + 0.0001 * distance * distance);
-	float intensity = (ambient + diffuse) * attenuation;
-	outFragColor = vec4(vec3(intensity), 1.0);
+    return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
+}
 
+void main()
+{
+    // outFragColor = vec4(abs(inTangent.xyz), 1.0);
+    // return;
+    vec4 baseColor = texture(colorTexture, inUV);
 
+    vec3 normalSample = texture(normalTexture, inUV).xyz;
+
+    vec4 metallicRoughness = texture(metallicRoughnessTexture, inUV);
+
+    float roughness = metallicRoughness.g;
+    float metallic = metallicRoughness.b;
+
+    roughness = clamp(roughness, MIN_ROUGHNESS, 1.0);
+    metallic = clamp(metallic, 0.0, 1.0);
+
+    float alphaRoughness = roughness * roughness;
+
+    float ao = texture(occlusionTexture, inUV).r;
+
+    vec3 emissive = texture(emissionTexture, inUV).rgb;
+
+    // For now use mesh normal.
+    // Later: use normalSample with TBN normal mapping.
+    vec3 n = getNormalFromMap();
+    //vec3 n = normalize(inNormal);
+
+    // light/view directions.
+    vec3 l = normalize(sceneData.sunlightDirection.xyz);
+    vec3 v = normalize(sceneData.cameraPosition.xyz - inPos);
+    vec3 h = normalize(l + v);
+
+    float NdotL = clamp(dot(n, l), 0.001, 1.0);
+    float NdotV = clamp(abs(dot(n, v)), 0.001, 1.0);
+    float NdotH = clamp(dot(n, h), 0.0, 1.0);
+    float VdotH = clamp(dot(v, h), 0.0, 1.0);
+
+    vec3 f0 = vec3(0.04);
+    vec3 diffuseColor = baseColor.rgb * (vec3(1.0) - f0);
+    diffuseColor *= 1.0 - metallic;
+
+    vec3 specularColor = mix(f0, baseColor.rgb, metallic);
+
+    float reflectance = max(max(specularColor.r, specularColor.g), specularColor.b);
+    float reflectance90 = clamp(reflectance * 25.0, 0.0, 1.0);
+
+    vec3 F = fresnelSchlick(
+        specularColor,
+        vec3(reflectance90),
+        VdotH
+    );
+
+    float G = geometricOcclusion(NdotL, NdotV, alphaRoughness);
+    float D = microfacetDistribution(NdotH, alphaRoughness);
+
+    vec3 diffuseContrib = (1.0 - F) * (diffuseColor / PI);
+    vec3 specContrib = F * G * D / max(4.0 * NdotL * NdotV, 0.001);
+
+    // vec3 lightColor = vec3(3.0);
+	// vec3 ambient = baseColor.rgb * 0.01;
+
+    // vec3 lightColor = vec3(sceneData.sunlightDirection.w);
+    // vec3 ambient = baseColor.rgb * 0.03;
+    vec3 lightColor =
+    sceneData.ambientColor.rgb *
+    sceneData.sunlightDirection.w;
+
+    vec3 ambient =
+        baseColor.rgb *
+        sceneData.ambientColor.rgb *
+        sceneData.ambientColor.a;
+        
+    vec3 color = ambient + NdotL * lightColor * (diffuseContrib + specContrib);
+	color *= ao;
+
+    color += emissive;
+
+    // -------------------------
+    // SPECULAR IBL placeholder
+    // -------------------------
+    vec3 reflectionDir = reflect(-v, n);
+
+    float maxReflectionLod = 8.0;
+    float reflectionLod =
+        roughness * roughness * maxReflectionLod;
+
+    vec3 prefilteredColor =
+        textureLod(
+            prefilteredMap,
+            reflectionDir,
+            reflectionLod
+        ).rgb;
+
+    vec2 brdf =
+        texture(
+            brdfLUT,
+            vec2(NdotV, roughness)
+        ).rg;
+    //brdf = vec2(0.5, 0.0);
+
+    vec3 specularIBL =
+        prefilteredColor *
+        (F * brdf.x + brdf.y);
+
+    color += specularIBL;
+
+    // -------------------------
+    // DIFFUSE IBL placeholder
+    // -------------------------
+
+    vec3 irradiance =
+        texture(irradianceMap, n).rgb;
+
+    vec3 diffuseIBL =
+        irradiance * diffuseColor * ao;
+
+    color += diffuseIBL;
+
+    // outFragColor = vec4(vec3(reflectionLod / maxReflectionLod), 1.0);
+    // return;
+    // outFragColor = vec4(environmentReflection * 5.0, 1.0);
+    // return;
+    // outFragColor = vec4(environmentReflection, 1.0);
+    // return;
+
+    // exposure
+    float exposure = 1.0;
+    color *= exposure;
+    // tone mapping
+    color = ACESFilm(color);
+    // simple gamma correction
+    color = pow(color, vec3(1.0 / 2.2));
+
+    outFragColor = vec4(color, baseColor.a);
+
+    // -------------------------
+    // DEBUG OPTIONS
+    // Uncomment one at a time.
+    // -------------------------
+
+    // outFragColor = baseColor;
+    // outFragColor = vec4(normalSample, 1.0);
+    // outFragColor = vec4(vec3(roughness), 1.0);
+    // outFragColor = vec4(vec3(metallic), 1.0);
+    // outFragColor = vec4(vec3(ao), 1.0);
+    // outFragColor = vec4(emissive, 1.0);
+    // outFragColor = vec4(vec3(NdotL), 1.0);
 }

@@ -36,6 +36,6 @@ struct Camera {
     
 
     // controls
-    float speed = 100.0f;
+    float speed = 20.0f;
     bool screenshotRequested = false;
 };
