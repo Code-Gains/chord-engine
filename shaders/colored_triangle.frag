@@ -196,7 +196,7 @@ void main()
 
     vec3 diffuseIBL =
         irradiance * diffuseColor * ao;
-
+    
     color += diffuseIBL;
 
     // outFragColor = vec4(vec3(reflectionLod / maxReflectionLod), 1.0);
@@ -215,17 +215,4 @@ void main()
     color = pow(color, vec3(1.0 / 2.2));
 
     outFragColor = vec4(color, baseColor.a);
-
-    // -------------------------
-    // DEBUG OPTIONS
-    // Uncomment one at a time.
-    // -------------------------
-
-    // outFragColor = baseColor;
-    // outFragColor = vec4(normalSample, 1.0);
-    // outFragColor = vec4(vec3(roughness), 1.0);
-    // outFragColor = vec4(vec3(metallic), 1.0);
-    // outFragColor = vec4(vec3(ao), 1.0);
-    // outFragColor = vec4(emissive, 1.0);
-    // outFragColor = vec4(vec3(NdotL), 1.0);
 }

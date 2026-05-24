@@ -353,6 +353,8 @@ namespace Engine {
         );
 
         InitBRDFLUTPipeline();
+        InitIrradiancePipeline();
+        InitPrefilterPipeline();
         InitMeshPipeline();
         InitInstancedMeshPipeline();
         InitSkyboxPipeline();
@@ -1933,6 +1935,7 @@ namespace Engine {
 
             vkDestroySampler(_device,_skyboxCubemap.sampler,nullptr);
             vkDestroySampler(_device,_brdfLUTSampler,nullptr);
+            vkDestroySampler(_device,_prefilteredCubemap.sampler,nullptr);
 
             DestroyImage(_whiteImage);
             DestroyImage(_greyImage);
@@ -1971,6 +1974,34 @@ namespace Engine {
           << _skyboxCubemap.image.mipLevels
           << "\n";
 
+        // Prefilter cubemap
+        uint32_t prefilterSize = 128;
+        uint32_t prefilterMipLevels = 5;
+
+        _prefilteredCubemap.image =
+            CreateEmptyCubemap(
+                prefilterSize,
+                VK_FORMAT_R16G16B16A16_SFLOAT,
+                prefilterMipLevels
+            );
+
+        _prefilteredCubemap.sampler = _skyboxCubemap.sampler;
+
+        _mainDeletionQueue.push_function([&]() {
+            DestroyImage(_prefilteredCubemap.image);
+        });
+
+        _irradianceCubemap.image =
+            CreateEmptyCubemap(
+                32,
+                VK_FORMAT_R16G16B16A16_SFLOAT,
+                1
+            );
+
+        _mainDeletionQueue.push_function([&]() {
+            DestroyImage(_irradianceCubemap.image);
+        });
+
         VkSamplerCreateInfo cubeSamplerInfo{
             .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO
         };
@@ -2003,6 +2034,32 @@ namespace Engine {
 
         vkCreateSampler(_device, &brdfSamplerInfo, nullptr, &_brdfLUTSampler);
 
+        // prefiltered sampler
+        VkSamplerCreateInfo prefilterSamplerInfo{
+            .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO
+        };
+
+        prefilterSamplerInfo.magFilter = VK_FILTER_LINEAR;
+        prefilterSamplerInfo.minFilter = VK_FILTER_LINEAR;
+        prefilterSamplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+
+        prefilterSamplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        prefilterSamplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        prefilterSamplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+
+        prefilterSamplerInfo.minLod = 0.0f;
+        prefilterSamplerInfo.maxLod =
+            static_cast<float>(_prefilteredCubemap.image.mipLevels - 1);
+
+        prefilterSamplerInfo.mipLodBias = 0.0f;
+
+        VK_CHECK(vkCreateSampler(
+            _device,
+            &prefilterSamplerInfo,
+            nullptr,
+            &_prefilteredCubemap.sampler
+        ));
+
         //_skyboxCubemap.sampler = _defaultSamplerLinear;
 
         _skyboxCubemap.descriptorSet =
@@ -2032,17 +2089,31 @@ namespace Engine {
             _environmentDescriptorLayout
         );
 
-
+        _irradianceCubemap.sampler = _skyboxCubemap.sampler;
         GenerateBRDFLUT();
+        GeneratePrefilteredCubemap();
+        GenerateIrradianceCubemap();
         DescriptorWriter envWriter;
 
-        envWriter.write_image(0, _skyboxCubemap.image.imageView, _skyboxCubemap.sampler,
+        envWriter.write_image(
+            0,
+            _irradianceCubemap.image.imageView,
+            _irradianceCubemap.sampler,
             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER);
+            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER
+        );
 
-        envWriter.write_image(1, _skyboxCubemap.image.imageView, _skyboxCubemap.sampler,
+        envWriter.write_image(
+            1,
+            _prefilteredCubemap.image.imageView,
+            _prefilteredCubemap.sampler,
             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER);
+            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER
+        );
+        //   envWriter.write_image(1, _skyboxCubemap.image.imageView, _skyboxCubemap.sampler,
+        //     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+        //     VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER);
+
         envWriter.write_image(
             2,
             _brdfLUTImage.imageView,
@@ -2052,6 +2123,113 @@ namespace Engine {
         );
 
         envWriter.update_set(_device, _environmentDescriptorSet);
+    }
+
+    void Core::InitPrefilterPipeline()
+    {
+        VkShaderModule fragShader;
+        if (!vkutil::load_shader_module("../../../shaders/prefilter.frag.spv", _device, &fragShader)) {
+            ENGINE_LOG_ERROR("Error when building prefilter fragment shader module");
+        }
+
+        VkShaderModule vertShader;
+        if (!vkutil::load_shader_module("../../../shaders/prefilter.vert.spv", _device, &vertShader)) {
+            ENGINE_LOG_ERROR("Error when building prefilter vertex shader module");
+        }
+
+        VkPushConstantRange pushRange{};
+        pushRange.offset = 0;
+        pushRange.size = sizeof(PrefilterPushConstants);
+        pushRange.stageFlags =
+            VK_SHADER_STAGE_VERTEX_BIT |
+            VK_SHADER_STAGE_FRAGMENT_BIT;
+
+        VkPipelineLayoutCreateInfo pipelineLayoutInfo =
+            vkinit::pipeline_layout_create_info();
+
+        pipelineLayoutInfo.pPushConstantRanges = &pushRange;
+        pipelineLayoutInfo.pushConstantRangeCount = 1;
+        pipelineLayoutInfo.pSetLayouts = &_skyboxDescriptorLayout;
+        pipelineLayoutInfo.setLayoutCount = 1;
+
+        VK_CHECK(vkCreatePipelineLayout(
+            _device,
+            &pipelineLayoutInfo,
+            nullptr,
+            &_prefilterPipelineLayout
+        ));
+
+        PipelineBuilder pipelineBuilder;
+
+        pipelineBuilder._pipelineLayout = _prefilterPipelineLayout;
+
+        pipelineBuilder.set_shaders(vertShader, fragShader);
+        pipelineBuilder.set_input_topology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
+        pipelineBuilder.set_polygon_mode(VK_POLYGON_MODE_FILL);
+        pipelineBuilder.set_cull_mode(VK_CULL_MODE_NONE, VK_FRONT_FACE_CLOCKWISE);
+        pipelineBuilder.set_multisampling_none();
+        pipelineBuilder.disable_blending();
+
+        pipelineBuilder.disable_depthtest();
+
+        pipelineBuilder.set_color_attachment_format(VK_FORMAT_R16G16B16A16_SFLOAT);
+
+        _prefilterPipeline =
+            pipelineBuilder.build_pipeline(_device);
+
+        vkDestroyShaderModule(_device, fragShader, nullptr);
+        vkDestroyShaderModule(_device, vertShader, nullptr);
+
+        _mainDeletionQueue.push_function([&]() {
+            vkDestroyPipelineLayout(_device, _prefilterPipelineLayout, nullptr);
+            vkDestroyPipeline(_device, _prefilterPipeline, nullptr);
+        });
+    }
+
+    void Core::InitIrradiancePipeline()
+    {
+        VkShaderModule fragShader;
+        vkutil::load_shader_module("../../../shaders/irradiance.frag.spv", _device, &fragShader);
+
+        VkShaderModule vertShader;
+        vkutil::load_shader_module("../../../shaders/prefilter.vert.spv", _device, &vertShader);
+
+        VkPushConstantRange pushRange{};
+        pushRange.offset = 0;
+        pushRange.size = sizeof(PrefilterPushConstants);
+        pushRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+
+        VkPipelineLayoutCreateInfo pipelineLayoutInfo =
+            vkinit::pipeline_layout_create_info();
+
+        pipelineLayoutInfo.pPushConstantRanges = &pushRange;
+        pipelineLayoutInfo.pushConstantRangeCount = 1;
+        pipelineLayoutInfo.pSetLayouts = &_skyboxDescriptorLayout;
+        pipelineLayoutInfo.setLayoutCount = 1;
+
+        VK_CHECK(vkCreatePipelineLayout(
+            _device,
+            &pipelineLayoutInfo,
+            nullptr,
+            &_irradiancePipelineLayout
+        ));
+
+        PipelineBuilder pipelineBuilder;
+        pipelineBuilder._pipelineLayout = _irradiancePipelineLayout;
+
+        pipelineBuilder.set_shaders(vertShader, fragShader);
+        pipelineBuilder.set_input_topology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
+        pipelineBuilder.set_polygon_mode(VK_POLYGON_MODE_FILL);
+        pipelineBuilder.set_cull_mode(VK_CULL_MODE_NONE, VK_FRONT_FACE_CLOCKWISE);
+        pipelineBuilder.set_multisampling_none();
+        pipelineBuilder.disable_blending();
+        pipelineBuilder.disable_depthtest();
+        pipelineBuilder.set_color_attachment_format(VK_FORMAT_R16G16B16A16_SFLOAT);
+
+        _irradiancePipeline = pipelineBuilder.build_pipeline(_device);
+
+        vkDestroyShaderModule(_device, fragShader, nullptr);
+        vkDestroyShaderModule(_device, vertShader, nullptr);
     }
 
     void Core::InitBRDFLUTPipeline()
@@ -2841,6 +3019,64 @@ namespace Engine {
         return cubemap;
     }
 
+    AllocatedImage Core::CreateEmptyCubemap(uint32_t size, VkFormat format, uint32_t mipLevels)
+    {
+        AllocatedImage cubemap{};
+
+        cubemap.imageExtent = VkExtent3D{ size, size, 1 };
+        cubemap.imageFormat = format;
+        cubemap.mipLevels = mipLevels;
+
+        VkImageCreateInfo imageInfo{};
+        imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        imageInfo.flags = VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
+        imageInfo.imageType = VK_IMAGE_TYPE_2D;
+        imageInfo.format = format;
+        imageInfo.extent = cubemap.imageExtent;
+        imageInfo.mipLevels = mipLevels;
+        imageInfo.arrayLayers = 6;
+        imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+        imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+        imageInfo.usage =
+            VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
+            VK_IMAGE_USAGE_SAMPLED_BIT |
+            VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
+            VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+
+        VmaAllocationCreateInfo allocInfo{};
+        allocInfo.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+
+        VK_CHECK(vmaCreateImage(
+            _allocator,
+            &imageInfo,
+            &allocInfo,
+            &cubemap.image,
+            &cubemap.allocation,
+            nullptr
+        ));
+
+        VkImageViewCreateInfo viewInfo{};
+        viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        viewInfo.image = cubemap.image;
+        viewInfo.viewType = VK_IMAGE_VIEW_TYPE_CUBE;
+        viewInfo.format = format;
+
+        viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        viewInfo.subresourceRange.baseMipLevel = 0;
+        viewInfo.subresourceRange.levelCount = mipLevels;
+        viewInfo.subresourceRange.baseArrayLayer = 0;
+        viewInfo.subresourceRange.layerCount = 6;
+
+        VK_CHECK(vkCreateImageView(
+            _device,
+            &viewInfo,
+            nullptr,
+            &cubemap.imageView
+        ));
+
+        return cubemap;
+    }
+
     void Core::GenerateCubemapMipmaps(VkCommandBuffer cmd, VkImage image, uint32_t width, uint32_t height, uint32_t mipLevels)
     {
          int32_t mipWidth = static_cast<int32_t>(width);
@@ -3069,6 +3305,289 @@ namespace Engine {
             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
         );
     });
+    }
+
+    void Core::GeneratePrefilteredCubemap()
+    {
+        ImmediateSubmit([&](VkCommandBuffer cmd) {
+
+            VkImageSubresourceRange fullRange{};
+            fullRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            fullRange.baseMipLevel = 0;
+            fullRange.levelCount = _prefilteredCubemap.image.mipLevels;
+            fullRange.baseArrayLayer = 0;
+            fullRange.layerCount = 6;
+
+            vkutil::transition_image(
+                cmd,
+                _prefilteredCubemap.image.image,
+                VK_IMAGE_LAYOUT_UNDEFINED,
+                VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                fullRange
+            );
+
+            glm::mat4 captureProjection =
+                glm::perspective(glm::radians(90.0f), 1.0f, 0.1f, 10.0f);
+
+            std::array<glm::mat4, 6> captureViews = {
+                glm::lookAt(glm::vec3(0), glm::vec3( 1,  0,  0), glm::vec3(0, -1,  0)),
+                glm::lookAt(glm::vec3(0), glm::vec3(-1,  0,  0), glm::vec3(0, -1,  0)),
+                glm::lookAt(glm::vec3(0), glm::vec3( 0,  1,  0), glm::vec3(0,  0,  1)),
+                glm::lookAt(glm::vec3(0), glm::vec3( 0, -1,  0), glm::vec3(0,  0, -1)),
+                glm::lookAt(glm::vec3(0), glm::vec3( 0,  0,  1), glm::vec3(0, -1,  0)),
+                glm::lookAt(glm::vec3(0), glm::vec3( 0,  0, -1), glm::vec3(0, -1,  0))
+            };
+
+            for (uint32_t mip = 0; mip < _prefilteredCubemap.image.mipLevels; mip++) {
+
+                uint32_t mipSize =
+                    static_cast<uint32_t>(
+                        _prefilteredCubemap.image.imageExtent.width *
+                        std::pow(0.5f, mip)
+                    );
+
+                float roughness =
+                    static_cast<float>(mip) /
+                    static_cast<float>(_prefilteredCubemap.image.mipLevels - 1);
+
+                for (uint32_t face = 0; face < 6; face++) {
+
+                    VkImageViewCreateInfo faceViewInfo{};
+                    faceViewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+                    faceViewInfo.image = _prefilteredCubemap.image.image;
+                    faceViewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+                    faceViewInfo.format = _prefilteredCubemap.image.imageFormat;
+
+                    faceViewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                    faceViewInfo.subresourceRange.baseMipLevel = mip;
+                    faceViewInfo.subresourceRange.levelCount = 1;
+                    faceViewInfo.subresourceRange.baseArrayLayer = face;
+                    faceViewInfo.subresourceRange.layerCount = 1;
+
+                    VkImageView faceView;
+                    VK_CHECK(vkCreateImageView(
+                        _device,
+                        &faceViewInfo,
+                        nullptr,
+                        &faceView
+                    ));
+
+                    VkRenderingAttachmentInfo colorAttachment =
+                        vkinit::attachment_info(
+                            faceView,
+                            nullptr,
+                            VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
+                        );
+
+                    VkRenderingInfo renderInfo =
+                        vkinit::rendering_info(
+                            VkExtent2D{ mipSize, mipSize },
+                            &colorAttachment,
+                            nullptr
+                        );
+
+                    vkCmdBeginRendering(cmd, &renderInfo);
+
+                    VkViewport viewport{};
+                    viewport.x = 0.0f;
+                    viewport.y = 0.0f;
+                    viewport.width = static_cast<float>(mipSize);
+                    viewport.height = static_cast<float>(mipSize);
+                    viewport.minDepth = 0.0f;
+                    viewport.maxDepth = 1.0f;
+
+                    vkCmdSetViewport(cmd, 0, 1, &viewport);
+
+                    VkRect2D scissor{};
+                    scissor.offset = {0, 0};
+                    scissor.extent = {mipSize, mipSize};
+
+                    vkCmdSetScissor(cmd, 0, 1, &scissor);
+
+                    vkCmdBindPipeline(
+                        cmd,
+                        VK_PIPELINE_BIND_POINT_GRAPHICS,
+                        _prefilterPipeline
+                    );
+
+                    vkCmdBindDescriptorSets(
+                        cmd,
+                        VK_PIPELINE_BIND_POINT_GRAPHICS,
+                        _prefilterPipelineLayout,
+                        0,
+                        1,
+                        &_skyboxCubemap.descriptorSet,
+                        0,
+                        nullptr
+                    );
+
+                    PrefilterPushConstants pc{};
+                    pc.viewProjection =
+                        captureProjection * captureViews[face];
+
+                    pc.roughness = roughness;
+
+                    vkCmdPushConstants(
+                        cmd,
+                        _prefilterPipelineLayout,
+                        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                        0,
+                        sizeof(PrefilterPushConstants),
+                        &pc
+                    );
+
+                    vkCmdDraw(cmd, 36, 1, 0, 0);
+
+                    vkCmdEndRendering(cmd);
+
+                    vkDestroyImageView(_device, faceView, nullptr);
+                }
+            }
+
+            vkutil::transition_image(
+                cmd,
+                _prefilteredCubemap.image.image,
+                VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                fullRange
+            );
+        });
+    }
+
+    void Core::GenerateIrradianceCubemap()
+    {
+        ImmediateSubmit([&](VkCommandBuffer cmd) {
+
+            VkImageSubresourceRange fullRange{};
+            fullRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            fullRange.baseMipLevel = 0;
+            fullRange.levelCount = 1;
+            fullRange.baseArrayLayer = 0;
+            fullRange.layerCount = 6;
+
+            vkutil::transition_image(
+                cmd,
+                _irradianceCubemap.image.image,
+                VK_IMAGE_LAYOUT_UNDEFINED,
+                VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                fullRange
+            );
+
+            glm::mat4 captureProjection =
+                glm::perspective(glm::radians(90.0f), 1.0f, 0.1f, 10.0f);
+
+            std::array<glm::mat4, 6> captureViews = {
+                glm::lookAt(glm::vec3(0), glm::vec3( 1,  0,  0), glm::vec3(0, -1,  0)),
+                glm::lookAt(glm::vec3(0), glm::vec3(-1,  0,  0), glm::vec3(0, -1,  0)),
+                glm::lookAt(glm::vec3(0), glm::vec3( 0,  1,  0), glm::vec3(0,  0,  1)),
+                glm::lookAt(glm::vec3(0), glm::vec3( 0, -1,  0), glm::vec3(0,  0, -1)),
+                glm::lookAt(glm::vec3(0), glm::vec3( 0,  0,  1), glm::vec3(0, -1,  0)),
+                glm::lookAt(glm::vec3(0), glm::vec3( 0,  0, -1), glm::vec3(0, -1,  0))
+            };
+
+            uint32_t size = _irradianceCubemap.image.imageExtent.width;
+
+            for (uint32_t face = 0; face < 6; face++) {
+
+                VkImageViewCreateInfo faceViewInfo{};
+                faceViewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+                faceViewInfo.image = _irradianceCubemap.image.image;
+                faceViewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+                faceViewInfo.format = _irradianceCubemap.image.imageFormat;
+
+                faceViewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                faceViewInfo.subresourceRange.baseMipLevel = 0;
+                faceViewInfo.subresourceRange.levelCount = 1;
+                faceViewInfo.subresourceRange.baseArrayLayer = face;
+                faceViewInfo.subresourceRange.layerCount = 1;
+
+                VkImageView faceView;
+                VK_CHECK(vkCreateImageView(
+                    _device,
+                    &faceViewInfo,
+                    nullptr,
+                    &faceView
+                ));
+
+                VkRenderingAttachmentInfo colorAttachment =
+                    vkinit::attachment_info(
+                        faceView,
+                        nullptr,
+                        VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
+                    );
+
+                VkRenderingInfo renderInfo =
+                    vkinit::rendering_info(
+                        VkExtent2D{size, size},
+                        &colorAttachment,
+                        nullptr
+                    );
+
+                vkCmdBeginRendering(cmd, &renderInfo);
+
+                VkViewport viewport{};
+                viewport.x = 0.0f;
+                viewport.y = 0.0f;
+                viewport.width = static_cast<float>(size);
+                viewport.height = static_cast<float>(size);
+                viewport.minDepth = 0.0f;
+                viewport.maxDepth = 1.0f;
+
+                vkCmdSetViewport(cmd, 0, 1, &viewport);
+
+                VkRect2D scissor{};
+                scissor.offset = {0, 0};
+                scissor.extent = {size, size};
+
+                vkCmdSetScissor(cmd, 0, 1, &scissor);
+
+                vkCmdBindPipeline(
+                    cmd,
+                    VK_PIPELINE_BIND_POINT_GRAPHICS,
+                    _irradiancePipeline
+                );
+
+                vkCmdBindDescriptorSets(
+                    cmd,
+                    VK_PIPELINE_BIND_POINT_GRAPHICS,
+                    _irradiancePipelineLayout,
+                    0,
+                    1,
+                    &_skyboxCubemap.descriptorSet,
+                    0,
+                    nullptr
+                );
+
+                PrefilterPushConstants pc{};
+                pc.viewProjection =
+                    captureProjection * captureViews[face];
+
+                pc.roughness = 0.0f;
+
+                vkCmdPushConstants(
+                    cmd,
+                    _irradiancePipelineLayout,
+                    VK_SHADER_STAGE_VERTEX_BIT,
+                    0,
+                    sizeof(PrefilterPushConstants),
+                    &pc
+                );
+
+                vkCmdDraw(cmd, 36, 1, 0, 0);
+
+                vkCmdEndRendering(cmd);
+
+                vkDestroyImageView(_device, faceView, nullptr);
+            }
+
+            vkutil::transition_image(
+                cmd,
+                _irradianceCubemap.image.image,
+                VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                fullRange
+            );
+        });
     }
 
     Core::Core()

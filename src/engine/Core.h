@@ -71,6 +71,11 @@ namespace Engine {
         uint32_t _pad[2];
     };
 
+    struct PrefilterPushConstants {
+        glm::mat4 viewProjection;
+        float roughness;
+    };
+
     // struct InstanceData {
     //     // glm::vec3 position;
     //     // glm::vec4 rotation;
@@ -380,6 +385,8 @@ private:
         void InitMeshPipeline();
         void InitSkyboxPipeline();
         void InitDefaultData();
+        void InitPrefilterPipeline();
+        void InitIrradiancePipeline();
         void InitBRDFLUTPipeline();
 
 
@@ -428,10 +435,16 @@ private:
         VkDescriptorSetLayout _skyboxDescriptorLayout = VK_NULL_HANDLE;
         VkPipelineLayout _skyboxPipelineLayout = VK_NULL_HANDLE;
         VkPipeline _skyboxPipeline = VK_NULL_HANDLE;
+        VkPipeline _prefilterPipeline;
+        VkPipeline _irradiancePipeline = VK_NULL_HANDLE;
+        VkPipelineLayout _irradiancePipelineLayout = VK_NULL_HANDLE;
 
         CubemapAsset _skyboxCubemap;
+        CubemapAsset _prefilteredCubemap;
+        CubemapAsset _irradianceCubemap;
         AllocatedImage CreateCubemap(const std::array<std::string, 6>& facePaths);
 
+        AllocatedImage CreateEmptyCubemap(uint32_t size, VkFormat format, uint32_t mipLevels);
         void GenerateCubemapMipmaps(VkCommandBuffer cmd, VkImage image, uint32_t width, uint32_t height, uint32_t mipLevels);
         void GenerateTangents(std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices, uint32_t startIndex, uint32_t indexCount);
 
@@ -441,7 +454,11 @@ private:
         VkPipeline _brdfLUTPipeline = VK_NULL_HANDLE;
         VkPipelineLayout _brdfLUTPipelineLayout = VK_NULL_HANDLE;
 
+        VkPipelineLayout _prefilterPipelineLayout;
+
         void GenerateBRDFLUT();
+        void GeneratePrefilteredCubemap();
+        void GenerateIrradianceCubemap();
 
     public:
         Core();
