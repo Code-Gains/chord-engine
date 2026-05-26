@@ -17,6 +17,15 @@ add_library(engine STATIC
     PhysicsBody.cpp
     NameComponent.cpp
     SunlightComponent.cpp
+    CoreGltfLoader.cpp
+    CoreInitializer.cpp
+    CoreSwapchain.cpp
+    CorePipelines.cpp
+    CoreDescriptors.cpp
+    CoreBuffers.cpp
+    CoreImages.cpp
+    CoreIBL.cpp
+    CoreMeshUtils.cpp
 )
 
 target_compile_definitions(engine PRIVATE
