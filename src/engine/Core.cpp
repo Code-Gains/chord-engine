@@ -29,6 +29,7 @@ using Clock = std::chrono::high_resolution_clock;
 // ECS PORT
 #include "EcsDebugger.h"
 #include "SunlightComponent.h"
+#include "ImGuiWindowRegistry.h"
 
 namespace Engine {
 #ifndef NDEBUG
@@ -74,10 +75,14 @@ void Core::Init()
     InitPipelines();
     InitDefaultData();
 
+    // ImGui Window Manager context
+    auto& windowRegistry = _registry.ctx().emplace<ImGuiWindowRegistry>();
+    windowRegistry.RegisterWindow("Texture Debugger", false);
+
+    // Core systems
     _systems.push_back(std::make_unique<EcsDebugger>(_registry));
     _systems.push_back(std::make_unique<InputSystem>(_registry, inputEntity, _window.get()));
     _systems.push_back(std::make_unique<CameraSystem>(_registry));
-    
 
     //everything went fine
     _isInitialized = true;
@@ -163,33 +168,43 @@ void Core::Run() {
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
         ImGui::DockSpaceOverViewport(0, ImGui::GetMainViewport(), ImGuiDockNodeFlags_PassthruCentralNode);
+        ImGuiWindowFlags flags = ImGuiWindowFlags_NoCollapse;
         DrawUi();
-        if (ImGui::Begin("Texture Debugger")) { // todo move out
+        auto& windowRegistry = _registry.ctx().get<ImGuiWindowRegistry>();
+        bool open = windowRegistry.IsWindowOpen("Texture Debugger");
+        if (open)
+        {
+            if (ImGui::Begin("Texture Debugger", &open))
+            {
+                for (size_t i = 0; i < _loadedImages.size(); i++)
+                {
+                    auto& image = _loadedImages[i];
 
-        for (size_t i = 0; i < _loadedImages.size(); i++) {
+                    if (!image)
+                    {
+                        ImGui::TextDisabled("Texture %zu : null", i);
+                        continue;
+                    }
 
-                auto& image = _loadedImages[i];
+                    ImGui::Text("Texture %zu", i);
 
-                if (!image) {
-                    ImGui::TextDisabled("Texture %zu : null", i);
-                    continue;
+                    ImTextureID id =
+                        reinterpret_cast<ImTextureID>(image->imguiDescriptorSet);
+
+                    if (!id)
+                    {
+                        ImGui::TextDisabled("Missing ImGui descriptor");
+                        continue;
+                    }
+
+                    ImGui::Image(id, ImVec2(128.0f, 128.0f));
                 }
-
-                ImGui::Text("Texture %zu", i);
-
-                ImTextureID id =
-                    reinterpret_cast<ImTextureID>(image->imguiDescriptorSet);
-
-                if (!id) {
-                    ImGui::TextDisabled("Missing ImGui descriptor");
-                    continue;
-                }
-
-                ImGui::Image(id, ImVec2(128.0f, 128.0f));
             }
-        }
 
-        ImGui::End();
+            ImGui::End();
+
+            windowRegistry.SetWindowOpen("Texture Debugger", open);
+        }
 
         ImGui::Render();
         ImGui::UpdatePlatformWindows();

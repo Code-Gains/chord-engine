@@ -1,6 +1,5 @@
 add_executable(editor
     Editor.cpp
-    EditorUiManager.cpp
     RegistryViewer.cpp
     ViewerComponentUi.cpp
     EntityViewer.cpp

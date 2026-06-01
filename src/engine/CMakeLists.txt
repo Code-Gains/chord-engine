@@ -26,6 +26,8 @@ add_library(engine STATIC
     CoreImages.cpp
     CoreIBL.cpp
     CoreMeshUtils.cpp
+    ImGuiWindowRegistry.cpp
+    ImGuiManager.cpp
 )
 
 target_compile_definitions(engine PRIVATE

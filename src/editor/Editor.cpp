@@ -2,7 +2,7 @@
 #include "engine/Log.h"
 #include "engine/VulkanDevice.h"
 #include "engine/Renderer.h"
-#include "EditorUiManager.h"
+#include "engine/ImGuiManager.h"
 #include "RegistryViewer.h"
 #include "EntityViewer.h"
 #include "NameComponent.h"
@@ -17,7 +17,7 @@ int main() {
     meshes = core.LoadGltfMeshes(&core, "../../../assets/DamagedHelmet.gltf").value();
     auto& registry = core.GetRegistry();
 
-    core._systems.push_back(std::make_unique<EditorUiManager>(registry));
+    core._systems.push_back(std::make_unique<ImGuiManager>(registry));
 
     auto registryViewer = std::make_unique<RegistryViewer>(registry);
     auto* registryViewerPtr = registryViewer.get();

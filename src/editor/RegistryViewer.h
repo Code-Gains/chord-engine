@@ -14,6 +14,5 @@ class RegistryViewer : public System {
 
 public:
     RegistryViewer(entt::registry& registry);
-    void ToggleEcsDebugger();
     const entt::entity& GetSelectedEntity() const;
 };

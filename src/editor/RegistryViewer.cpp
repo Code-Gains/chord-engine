@@ -4,6 +4,7 @@
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_vulkan.h>
 #include "NameComponent.h"
+#include <ImGuiWindowRegistry.h>
 
 void RegistryViewer::Update(float deltaTime)
 {
@@ -11,34 +12,49 @@ void RegistryViewer::Update(float deltaTime)
 
 void RegistryViewer::DrawUi()
 {
-      ImGui::Begin("Registry Viewer");
+    auto& windowRegistry = _registry.ctx().get<ImGuiWindowRegistry>();
 
-    auto view = _registry.view<Transform>();
+    if (!windowRegistry.IsWindowOpen("Registry Viewer"))
+        return;
 
-    for (auto entity : view)
+    bool open = true;
+
+    if (ImGui::Begin("Registry Viewer", &open))
     {
-        std::string label;
+        auto view = _registry.view<Transform>();
 
-        if (auto* name = _registry.try_get<NameComponent>(entity))
+        for (auto entity : view)
         {
-            label = name->name;
-        }
-        else
-        {
-            label = "Entity " + std::to_string((int)entt::to_integral(entity));
-        }
+            std::string label;
 
-        if (ImGui::Selectable(label.c_str(), _selectedEntity == entity))
-        {
-            _selectedEntity = entity;
+            if (auto* name = _registry.try_get<NameComponent>(entity))
+            {
+                label = name->name;
+            }
+            else
+            {
+                label = "Entity " + std::to_string((int)entt::to_integral(entity));
+            }
+
+            if (ImGui::Selectable(label.c_str(), _selectedEntity == entity))
+            {
+                _selectedEntity = entity;
+            }
         }
     }
 
     ImGui::End();
+
+    windowRegistry.SetWindowOpen("Registry Viewer", open);
 }
 
 RegistryViewer::RegistryViewer(entt::registry &registry) : System(registry) {
-    //_componentUis.push_back(std::make_unique<TransformComponentUi>());
+    auto& windowRegistry = _registry.ctx().get<ImGuiWindowRegistry>();
+
+    windowRegistry.RegisterWindow(
+        "Registry Viewer",
+        true
+    );
 }
 
 const entt::entity& RegistryViewer::GetSelectedEntity() const
