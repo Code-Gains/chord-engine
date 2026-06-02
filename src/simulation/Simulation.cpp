@@ -1078,9 +1078,15 @@ int main () {
     Engine::Core core;
     core.Init();
 
+    std::vector<std::shared_ptr<MeshAsset>> helmetMeshes;
+    helmetMeshes = core.LoadGltfMeshes(&core, "../../../assets/DamagedHelmet.gltf").value();
+
+    std::vector<std::shared_ptr<MeshAsset>> cubeMeshes;
+    cubeMeshes = core.LoadGltfMeshes(&core, "../../../assets/BoxTextured.gltf").value();
+
     auto& registry = core.GetRegistry();
     auto simulation = std::make_unique<Simulation>(registry);
-    simulation->Initialize(core._testMeshes[2], core._testMeshes[0]); // planet mesh and particle mesh
+    simulation->Initialize(helmetMeshes[0], cubeMeshes[0]); // planet mesh and particle mesh
     core._systems.push_back(std::move(simulation));
     
     core.Run();

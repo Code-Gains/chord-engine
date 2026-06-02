@@ -94,4 +94,5 @@ void main() {
     mat3 model3x3 = mat3(buildTransform(inst.position, inst.rotation, inst.scale));
     outNormal = normalize(transpose(inverse(model3x3)) * vertex.normal);
     outUV = vec2(vertex.uv_x, vertex.uv_y);
+    outTangent = vec4(normalize(model3x3 * vertex.tangent.xyz), vertex.tangent.w);
 }

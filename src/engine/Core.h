@@ -92,9 +92,9 @@ struct InstanceData {
 };
 
 struct GPUSceneData {
-    glm::vec4 cameraPosition;
-    glm::vec4 sunlightDirection;
-    glm::vec4 ambientColor;
+    glm::vec4 cameraPosition = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
+    glm::vec4 sunlightDirection = glm::vec4(-0.3f, 1.0f, -0.6f, 3.0f);
+    glm::vec4 ambientColor = glm::vec4(1.0f, 1.0f, 1.0f, 0.05f);
 };
 
 struct ComputePushConstants {
@@ -403,6 +403,8 @@ private:
     AllocatedImage _whiteImage;
     AllocatedImage _blackImage;
     AllocatedImage _greyImage;
+    AllocatedImage _flatNormalImage;
+    AllocatedImage _defaultMetallicRoughnessImage;
     AllocatedImage _errorCheckerboardImage;
     std::vector<std::shared_ptr<AllocatedImage>> _loadedImages;
 
@@ -448,7 +450,7 @@ private:
     // ------------------------------------------------------------------------
     // Materials
     // ------------------------------------------------------------------------
-    std::vector<MaterialInstance> _loadedMaterials;
+    std::deque<MaterialInstance> _loadedMaterials;
     MaterialInstance _defaultMaterial;
 
     // ------------------------------------------------------------------------
@@ -550,17 +552,19 @@ public:
         std::filesystem::path filePath
     );
 
-    void LoadGltfImages(
+    size_t LoadGltfImages(
         fastgltf::Asset& gltf
     );
 
-    void LoadGltfMaterials(
-        fastgltf::Asset& gltf
+    size_t LoadGltfMaterials(
+        fastgltf::Asset& gltf,
+        size_t imageOffset
     );
 
     std::vector<std::shared_ptr<MeshAsset>> LoadGltfMeshAssets(
         Core* engine,
-        fastgltf::Asset& gltf
+        fastgltf::Asset& gltf,
+        size_t materialOffset
     );
 
     void LoadGltfPrimitive(
@@ -568,7 +572,8 @@ public:
         fastgltf::Primitive& primitive,
         MeshAsset& mesh,
         std::vector<Vertex>& vertices,
-        std::vector<uint32_t>& indices
+        std::vector<uint32_t>& indices,
+        size_t materialOffset
     );
 
     void LoadGltfPrimitivePositions(
@@ -610,13 +615,15 @@ public:
 
     void AssignGltfPrimitiveMaterial(
         fastgltf::Primitive& primitive,
-        GeoSurface& surface
+        GeoSurface& surface,
+        size_t materialOffset
     );
 
     template<typename TextureInfo>
     void AssignGltfMaterialTexture(
         fastgltf::Asset& gltf,
         const std::optional<TextureInfo>& textureInfo,
+        size_t imageOffset,
         AllocatedImage*& targetImage
     );
 }; // End of Core class
@@ -625,6 +632,7 @@ template<typename TextureInfo>
 void Core::AssignGltfMaterialTexture(
     fastgltf::Asset& gltf,
     const std::optional<TextureInfo>& textureInfo,
+    size_t imageOffset,
     AllocatedImage*& targetImage
 )
 {
@@ -639,7 +647,7 @@ void Core::AssignGltfMaterialTexture(
         return;
     }
 
-    auto imageIndex = texture.imageIndex.value();
+    auto imageIndex = imageOffset + texture.imageIndex.value();
 
     if (imageIndex < _loadedImages.size() &&
         _loadedImages[imageIndex])

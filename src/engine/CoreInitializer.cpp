@@ -243,6 +243,14 @@ void Core::InitDefaultData()
     _blackImage = CreateImage((void*)&black, VkExtent3D{ 1, 1, 1 }, VK_FORMAT_R8G8B8A8_UNORM,
         VK_IMAGE_USAGE_SAMPLED_BIT);
 
+    uint32_t flatNormal = glm::packUnorm4x8(glm::vec4(0.5f, 0.5f, 1.0f, 1.0f));
+    _flatNormalImage = CreateImage((void*)&flatNormal, VkExtent3D{ 1, 1, 1 }, VK_FORMAT_R8G8B8A8_UNORM,
+        VK_IMAGE_USAGE_SAMPLED_BIT);
+
+    uint32_t defaultMetallicRoughness = glm::packUnorm4x8(glm::vec4(1.0f, 1.0f, 0.0f, 1.0f));
+    _defaultMetallicRoughnessImage = CreateImage((void*)&defaultMetallicRoughness, VkExtent3D{ 1, 1, 1 }, VK_FORMAT_R8G8B8A8_UNORM,
+        VK_IMAGE_USAGE_SAMPLED_BIT);
+
     //checkerboard image
     uint32_t magenta = glm::packUnorm4x8(glm::vec4(1, 0, 1, 1));
     std::array<uint32_t, 16 *16 > pixels; //for 16x16 checkerboard texture
@@ -289,6 +297,8 @@ void Core::InitDefaultData()
         DestroyImage(_whiteImage);
         DestroyImage(_greyImage);
         DestroyImage(_blackImage);
+        DestroyImage(_flatNormalImage);
+        DestroyImage(_defaultMetallicRoughnessImage);
         DestroyImage(_errorCheckerboardImage);
         DestroyImage(_brdfLUTImage);
     });

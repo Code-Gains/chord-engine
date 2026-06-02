@@ -591,6 +591,8 @@ void Core::DrawGeometry(VkCommandBuffer cmd)
 
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, _instancedMeshPipeline);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, _instancedMeshPipelineLayout, 1, 1, &globalDescriptor, 0, nullptr);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, _instancedMeshPipelineLayout, 2, 1, &_environmentDescriptorSet, 0, nullptr);
     // ECS Batch Rendering
     {
         auto t0 = Clock::now();
@@ -644,6 +646,72 @@ void Core::DrawGeometry(VkCommandBuffer cmd)
 
         size_t offset = 0; // starting point in the instance buffer
         for (auto& [mesh, instances] : _batches) {
+            auto& surface = mesh->surfaces[0];
+            auto* material = surface.material;
+
+            AllocatedImage* baseColor = material ? material->image : nullptr;
+            AllocatedImage* normal = material ? material->normalImage : nullptr;
+            AllocatedImage* metallicRoughness = material ? material->metallicRoughnessImage : nullptr;
+            AllocatedImage* occlusion = material ? material->occlusionImage : nullptr;
+            AllocatedImage* emissive = material ? material->emissionImage : nullptr;
+
+            if (!baseColor) baseColor = &_errorCheckerboardImage;
+            if (!normal) normal = &_flatNormalImage;
+            if (!metallicRoughness) metallicRoughness = &_defaultMetallicRoughnessImage;
+            if (!occlusion) occlusion = &_whiteImage;
+            if (!emissive) emissive = &_blackImage;
+
+            VkDescriptorSet imageSet =
+                GetCurrentFrame()._frameDescriptors.allocate(
+                    _device,
+                    _multiImageDescriptorLayout
+                );
+
+            DescriptorWriter imageWriter;
+            imageWriter.write_image(
+                0,
+                baseColor->imageView,
+                baseColor->sampler != VK_NULL_HANDLE ? baseColor->sampler : _defaultSamplerLinear,
+                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER
+            );
+
+            imageWriter.write_image(
+                1,
+                normal->imageView,
+                normal->sampler != VK_NULL_HANDLE ? normal->sampler : _defaultSamplerLinear,
+                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER
+            );
+
+            imageWriter.write_image(
+                2,
+                metallicRoughness->imageView,
+                metallicRoughness->sampler != VK_NULL_HANDLE ? metallicRoughness->sampler : _defaultSamplerLinear,
+                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER
+            );
+
+            imageWriter.write_image(
+                3,
+                occlusion->imageView,
+                occlusion->sampler != VK_NULL_HANDLE ? occlusion->sampler : _defaultSamplerLinear,
+                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER
+            );
+
+            imageWriter.write_image(
+                4,
+                emissive->imageView,
+                emissive->sampler != VK_NULL_HANDLE ? emissive->sampler : _defaultSamplerLinear,
+                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER
+            );
+
+            imageWriter.update_set(_device, imageSet);
+
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, _instancedMeshPipelineLayout, 0, 1, &imageSet, 0, nullptr);
+
             size_t dataSize = instances.size() * sizeof(InstanceData);
 
             // Copy CPU-side instances into the persistently mapped GPU buffer
@@ -673,9 +741,9 @@ void Core::DrawGeometry(VkCommandBuffer cmd)
 
             // Draw all instances of this mesh
             vkCmdDrawIndexed(cmd,
-                            mesh->surfaces[0].count,    // index count per mesh
+                            surface.count,              // index count per mesh
                             instances.size(),           // number of instances
-                            mesh->surfaces[0].startIndex,
+                            surface.startIndex,
                             0,
                             0);
 
@@ -709,8 +777,8 @@ void Core::DrawGeometry(VkCommandBuffer cmd)
         AllocatedImage* emissive = material ? material->emissionImage : nullptr;
 
         if (!baseColor) baseColor = &_errorCheckerboardImage;
-        if (!normal) normal = &_errorCheckerboardImage;
-        if (!metallicRoughness) metallicRoughness = &_whiteImage;
+        if (!normal) normal = &_flatNormalImage;
+        if (!metallicRoughness) metallicRoughness = &_defaultMetallicRoughnessImage;
         if (!occlusion) occlusion = &_whiteImage;
         if (!emissive) emissive = &_blackImage;
 

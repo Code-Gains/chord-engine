@@ -38,5 +38,5 @@ void main()
     outNormal = normalize(normalMatrix * vertex.normal);
 
     outUV = vec2(vertex.uv_x, vertex.uv_y);
-    outTangent = vertex.tangent;
+    outTangent = vec4(normalize(mat3(PushConstants.model) * vertex.tangent.xyz), vertex.tangent.w);
 }

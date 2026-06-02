@@ -12,10 +12,10 @@ std::optional<std::vector<std::shared_ptr<MeshAsset>>> Core::LoadGltfMeshes(Core
     }
     auto& gltf = loadResult.value();
 
-    LoadGltfImages(gltf);
-    LoadGltfMaterials(gltf);
+    size_t imageOffset = LoadGltfImages(gltf);
+    size_t materialOffset = LoadGltfMaterials(gltf, imageOffset);
 
-    return LoadGltfMeshAssets(engine, gltf);
+    return LoadGltfMeshAssets(engine, gltf, materialOffset);
 }
 
 std::optional<AllocatedImage> Core::LoadGltfImage(fastgltf::Asset &asset, fastgltf::Image &image)
@@ -234,70 +234,79 @@ std::optional<fastgltf::Asset> Core::LoadGltfAsset(std::filesystem::path filePat
     return std::nullopt;
 }
 
-void Core::LoadGltfImages(fastgltf::Asset &gltf)
+size_t Core::LoadGltfImages(fastgltf::Asset &gltf)
 {
-    _loadedImages.clear();
-    _loadedImages.resize(gltf.images.size());
+    size_t imageOffset = _loadedImages.size();
+    _loadedImages.resize(imageOffset + gltf.images.size());
 
     for (size_t i = 0; i < gltf.images.size(); i++) {
         auto loadedImage = LoadGltfImage(gltf, gltf.images[i]);
 
         if (loadedImage.has_value()) {
-            _loadedImages[i] =
+            _loadedImages[imageOffset + i] =
                 std::make_shared<AllocatedImage>(loadedImage.value());
 
-            AllocatedImage* imageToDelete = _loadedImages[i].get();
+            AllocatedImage* imageToDelete = _loadedImages[imageOffset + i].get();
 
             _mainDeletionQueue.push_function([this, imageToDelete]() {
                 DestroyImage(*imageToDelete);
             });
         }
     }
+
+    return imageOffset;
 }
 
-void Core::LoadGltfMaterials(fastgltf::Asset &gltf)
+size_t Core::LoadGltfMaterials(fastgltf::Asset &gltf, size_t imageOffset)
 {
-    _loadedMaterials.clear();
-    _loadedMaterials.resize(gltf.materials.size());
+    size_t materialOffset = _loadedMaterials.size();
+    _loadedMaterials.resize(materialOffset + gltf.materials.size());
 
     for (size_t i = 0; i < gltf.materials.size(); i++) {
         auto& gltfMaterial = gltf.materials[i];
-        auto& material = _loadedMaterials[i];
+        auto& material = _loadedMaterials[materialOffset + i];
 
         material.image = &_errorCheckerboardImage;
-        material.normalImage = &_errorCheckerboardImage;
-        material.metallicRoughnessImage = &_whiteImage;
+        material.normalImage = &_flatNormalImage;
+        material.metallicRoughnessImage = &_defaultMetallicRoughnessImage;
         material.occlusionImage = &_whiteImage;
         material.emissionImage = &_blackImage;
 
         AssignGltfMaterialTexture(
             gltf,
             gltfMaterial.pbrData.baseColorTexture,
+            imageOffset,
             material.image);
 
         AssignGltfMaterialTexture(
             gltf,
             gltfMaterial.normalTexture,
+            imageOffset,
             material.normalImage);
 
         AssignGltfMaterialTexture(
             gltf,
             gltfMaterial.pbrData.metallicRoughnessTexture,
+            imageOffset,
             material.metallicRoughnessImage);
 
         AssignGltfMaterialTexture(
             gltf,
             gltfMaterial.occlusionTexture,
+            imageOffset,
             material.occlusionImage);
 
         AssignGltfMaterialTexture(
             gltf,
             gltfMaterial.emissiveTexture,
+            imageOffset,
             material.emissionImage);
     }
+
+    return materialOffset;
 }
 
-std::vector<std::shared_ptr<MeshAsset>> Core::LoadGltfMeshAssets(Core *engine, fastgltf::Asset &gltf)
+std::vector<std::shared_ptr<MeshAsset>> Core::LoadGltfMeshAssets(Core *engine, fastgltf::Asset &gltf, size_t materialOffset)
 {
     std::vector<std::shared_ptr<MeshAsset>> meshes;
 
@@ -309,7 +318,7 @@ std::vector<std::shared_ptr<MeshAsset>> Core::LoadGltfMeshAssets(Core *engine, f
         std::vector<Vertex> vertices;
 
         for (auto& primitive : mesh.primitives) {
-            LoadGltfPrimitive(gltf, primitive, newMesh, vertices, indices);
+            LoadGltfPrimitive(gltf, primitive, newMesh, vertices, indices, materialOffset);
         }
 
         if (!indices.empty() && !vertices.empty()) {
@@ -330,7 +339,7 @@ std::vector<std::shared_ptr<MeshAsset>> Core::LoadGltfMeshAssets(Core *engine, f
     return meshes;
 }
 
-void Core::LoadGltfPrimitive(fastgltf::Asset &gltf, fastgltf::Primitive &primitive, MeshAsset &mesh, std::vector<Vertex> &vertices, std::vector<uint32_t> &indices)
+void Core::LoadGltfPrimitive(fastgltf::Asset &gltf, fastgltf::Primitive &primitive, MeshAsset &mesh, std::vector<Vertex> &vertices, std::vector<uint32_t> &indices, size_t materialOffset)
 {
     if (!primitive.indicesAccessor.has_value()) {
         return;
@@ -373,7 +382,7 @@ void Core::LoadGltfPrimitive(fastgltf::Asset &gltf, fastgltf::Primitive &primiti
     bool hasTangents = LoadGltfPrimitiveTangents(
         gltf, primitive, positionAccessor.count, initialVertex, vertices);
 
-    AssignGltfPrimitiveMaterial(primitive, surface);
+    AssignGltfPrimitiveMaterial(primitive, surface, materialOffset);
 
     if (!hasTangents && hasNormals && hasUVs) {
         GenerateTangents(
@@ -491,7 +500,7 @@ bool Core::LoadGltfPrimitiveTangents(fastgltf::Asset &gltf, fastgltf::Primitive 
     return true;
 }
 
-void Core::AssignGltfPrimitiveMaterial(fastgltf::Primitive &primitive, GeoSurface &surface)
+void Core::AssignGltfPrimitiveMaterial(fastgltf::Primitive &primitive, GeoSurface &surface, size_t materialOffset)
 {
     if (!primitive.materialIndex.has_value()) {
         return;
@@ -499,8 +508,10 @@ void Core::AssignGltfPrimitiveMaterial(fastgltf::Primitive &primitive, GeoSurfac
 
     uint32_t materialIndex = primitive.materialIndex.value();
 
-    if (materialIndex < _loadedMaterials.size()) {
-        surface.material = &_loadedMaterials[materialIndex];
+    size_t loadedMaterialIndex = materialOffset + materialIndex;
+
+    if (loadedMaterialIndex < _loadedMaterials.size()) {
+        surface.material = &_loadedMaterials[loadedMaterialIndex];
     }
 }
 
