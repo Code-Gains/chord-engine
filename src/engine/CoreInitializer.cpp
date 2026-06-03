@@ -311,8 +311,8 @@ void Core::InitDefaultData()
         DestroyBuffer(rectangle.vertexBuffer);
     });
 
-    _testMeshes = LoadGltfMeshes(this,"../../../assets/basicmesh.glb").value();
-    auto tempMeshes = LoadGltfMeshes(this,"../../../assets/tetrahedron.glb").value();
+    _testMeshes = LoadGltfMeshes(this,"assets/basicmesh.glb").value();
+    auto tempMeshes = LoadGltfMeshes(this,"assets/tetrahedron.glb").value();
     _testMeshes.insert(
         _testMeshes.end(),              // insert at the end of _testMeshes
         tempMeshes.begin(),             // start of tempMeshes
@@ -321,12 +321,12 @@ void Core::InitDefaultData()
 
     // Load Cubemap images
     _skyboxCubemap.image = CreateCubemap({
-        "../../../assets/right.png",
-        "../../../assets/left.png",
-        "../../../assets/top.png",
-        "../../../assets/bottom.png",
-        "../../../assets/front.png",
-        "../../../assets/back.png"
+        "assets/right.png",
+        "assets/left.png",
+        "assets/top.png",
+        "assets/bottom.png",
+        "assets/front.png",
+        "assets/back.png"
     });
 
     // Prefilter cubemap

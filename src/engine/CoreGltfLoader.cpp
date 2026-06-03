@@ -6,7 +6,10 @@ namespace Engine {
 
 std::optional<std::vector<std::shared_ptr<MeshAsset>>> Core::LoadGltfMeshes(Core* engine, std::filesystem::path filePath)
 {
-    auto loadResult = LoadGltfAsset(filePath);
+    auto resolvedPath = ResolveProjectPath(filePath);
+    auto sourcePath = MakeProjectRelative(resolvedPath);
+
+    auto loadResult = LoadGltfAsset(resolvedPath);
     if (!loadResult.has_value()) {
         return std::nullopt;
     }
@@ -15,7 +18,7 @@ std::optional<std::vector<std::shared_ptr<MeshAsset>>> Core::LoadGltfMeshes(Core
     size_t imageOffset = LoadGltfImages(gltf);
     size_t materialOffset = LoadGltfMaterials(gltf, imageOffset);
 
-    return LoadGltfMeshAssets(engine, gltf, materialOffset);
+    return LoadGltfMeshAssets(engine, gltf, materialOffset, sourcePath);
 }
 
 std::optional<AllocatedImage> Core::LoadGltfImage(fastgltf::Asset &asset, fastgltf::Image &image)
@@ -266,7 +269,7 @@ size_t Core::LoadGltfMaterials(fastgltf::Asset &gltf, size_t imageOffset)
         auto& gltfMaterial = gltf.materials[i];
         auto& material = _loadedMaterials[materialOffset + i];
 
-        material.image = &_errorCheckerboardImage;
+        material.image = &_greyImage;
         material.normalImage = &_flatNormalImage;
         material.metallicRoughnessImage = &_defaultMetallicRoughnessImage;
         material.occlusionImage = &_whiteImage;
@@ -306,13 +309,19 @@ size_t Core::LoadGltfMaterials(fastgltf::Asset &gltf, size_t imageOffset)
     return materialOffset;
 }
 
-std::vector<std::shared_ptr<MeshAsset>> Core::LoadGltfMeshAssets(Core *engine, fastgltf::Asset &gltf, size_t materialOffset)
+std::vector<std::shared_ptr<MeshAsset>> Core::LoadGltfMeshAssets(Core *engine, fastgltf::Asset &gltf, size_t materialOffset, const std::filesystem::path& sourcePath)
 {
     std::vector<std::shared_ptr<MeshAsset>> meshes;
 
-    for (fastgltf::Mesh& mesh : gltf.meshes) {
+    for (size_t meshIndex = 0; meshIndex < gltf.meshes.size(); meshIndex++) {
+        fastgltf::Mesh& mesh = gltf.meshes[meshIndex];
+
         MeshAsset newMesh;
         newMesh.name = mesh.name;
+        newMesh.source = MeshAssetReference {
+            sourcePath.generic_string(),
+            static_cast<uint32_t>(meshIndex)
+        };
 
         std::vector<uint32_t> indices;
         std::vector<Vertex> vertices;

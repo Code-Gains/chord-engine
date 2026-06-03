@@ -3,6 +3,7 @@ add_executable(editor
     RegistryViewer.cpp
     ViewerComponentUi.cpp
     EntityViewer.cpp
+    AssetViewer.cpp
 )
 
 target_compile_definitions(editor PRIVATE

@@ -1,5 +1,16 @@
 #pragma once
+#include <cstdint>
+#include <string>
 #include <vk_types.h>
+
+struct MeshAssetReference {
+    std::string path;
+    uint32_t meshIndex = 0;
+
+    bool IsValid() const {
+        return !path.empty();
+    }
+};
 
 struct GeoSurface {
     uint32_t startIndex;
@@ -9,6 +20,7 @@ struct GeoSurface {
 
 struct MeshAsset {
     std::string name;
+    MeshAssetReference source;
 
     std::vector<GeoSurface> surfaces;
     GPUMeshBuffers meshBuffers;
@@ -16,6 +28,7 @@ struct MeshAsset {
 
 struct MeshComponent {
     std::shared_ptr<MeshAsset> mesh;
+    MeshAssetReference source;
 };
 
 // for rendering single entity add this component

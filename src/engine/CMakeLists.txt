@@ -28,6 +28,7 @@ add_library(engine STATIC
     CoreMeshUtils.cpp
     ImGuiWindowRegistry.cpp
     ImGuiManager.cpp
+    WorldSerializer.cpp
 )
 
 target_compile_definitions(engine PRIVATE
@@ -45,6 +46,7 @@ target_include_directories(engine
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${glfw_SOURCE_DIR}/include
         ${glm_SOURCE_DIR}
+        ${cereal_SOURCE_DIR}/include
 )
 
 # ---------------------
@@ -74,6 +76,8 @@ target_link_libraries(engine
         imgui
         fastgltf
         EnTT::EnTT
+        nlohmann_json::nlohmann_json
+        Jolt
 )
 
 # ---------------------

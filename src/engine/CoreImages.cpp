@@ -170,8 +170,10 @@ AllocatedImage Core::CreateCubemap(const std::array<std::string, 6>& facePaths)
     std::array<stbi_uc*, 6> faces{};
 
     for (int i = 0; i < 6; i++) {
+        auto resolvedFacePath = ResolveProjectPath(facePaths[i]);
+
         faces[i] = stbi_load(
-            facePaths[i].c_str(),
+            resolvedFacePath.string().c_str(),
             &width,
             &height,
             &channels,
@@ -180,7 +182,7 @@ AllocatedImage Core::CreateCubemap(const std::array<std::string, 6>& facePaths)
 
         if (!faces[i]) {
             std::cout << "Failed to load cubemap face: "
-                    << facePaths[i] << "\n";
+                    << resolvedFacePath << "\n";
         }
     }
 

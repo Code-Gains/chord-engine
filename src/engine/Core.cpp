@@ -44,6 +44,40 @@ Core::Core()
 {
 }
 
+void Core::SetProjectRoot(std::filesystem::path root)
+{
+    _projectRoot = std::filesystem::weakly_canonical(std::move(root));
+}
+
+const std::filesystem::path& Core::GetProjectRoot() const
+{
+    return _projectRoot;
+}
+
+std::filesystem::path Core::ResolveProjectPath(const std::filesystem::path& path) const
+{
+    if (path.is_absolute()) {
+        return path;
+    }
+
+    return _projectRoot / path;
+}
+
+std::filesystem::path Core::MakeProjectRelative(const std::filesystem::path& path) const
+{
+    std::filesystem::path resolvedPath =
+        path.is_absolute() ? path : std::filesystem::weakly_canonical(path);
+
+    std::error_code error;
+    auto relativePath = std::filesystem::relative(resolvedPath, _projectRoot, error);
+
+    if (error || relativePath.empty()) {
+        return path.generic_string();
+    }
+
+    return relativePath.generic_string();
+}
+
 void Core::Init()
 {
 #ifdef DEBUG
@@ -512,6 +546,10 @@ void Core::DrawGeometry(VkCommandBuffer cmd)
                 sunlight.ambient
             );
     }
+    else {
+        sceneData.sunlightDirection = glm::vec4(0.0f);
+        sceneData.ambientColor = glm::vec4(0.0f);
+    }
 
     auto cameraView = _registry.view<Camera, Transform>();
     if (cameraView.begin() != cameraView.end()) {
@@ -596,56 +634,50 @@ void Core::DrawGeometry(VkCommandBuffer cmd)
     // ECS Batch Rendering
     {
         auto t0 = Clock::now();
-        //_batches.clear(); // clear previous frame data
+        for (auto& [mesh, instances] : _batches) {
+            instances.clear();
+        }
+
         // exclude entities that are not meant for batch rendering
         auto registryView = _registry.view<MeshComponent, Transform>(entt::exclude<SingleRenderTag>);
-        size_t offset2 = 0;
-
-
-        size_t numThreads = _threadPool.threadCount;
-        size_t numEntities = std::distance(registryView.begin(), registryView.end()); //1000000; // doesnt matter if it is accurate since this is just for load balancing
-        size_t chunkSize = (numEntities + numThreads - 1) / numThreads;
 
         for (auto entity : registryView) {
             auto& meshComponent = registryView.get<MeshComponent>(entity);
+            auto& trans = registryView.get<Transform>(entity);
+
+            if (!meshComponent.mesh || meshComponent.mesh->surfaces.empty())
+                continue;
+
+            InstanceData instance{};
+            instance.position = trans.position;
+            instance.rotation = trans.rotation;
+            instance.scale = trans.scale;
+
             auto& batch = _batches[meshComponent.mesh.get()];
-            batch.resize(numEntities);
-            break;
-        }
-        std::vector<std::unordered_map<MeshAsset*, std::vector<InstanceData>>> threadLocalBatches(numThreads);  
+            if (batch.capacity() == 0) {
+                batch.reserve(128);
+            }
 
-        auto entitiesBegin = registryView.begin();
-
-        for (size_t t = 0; t < numThreads; ++t) {
-            _threadPool.Enqueue([&, t]() {
-                size_t start = t * chunkSize;
-                size_t end = std::min(start + chunkSize, numEntities);
-
-                auto it = entitiesBegin;
-                std::advance(it, start);
-
-                for (size_t i = start; i < end; ++i, ++it) {
-                    auto entity = *it;
-                    auto& trans = registryView.get<Transform>(entity);
-
-                    InstanceData instance{};
-                    instance.position = trans.position;
-                    instance.rotation = trans.rotation;
-                    instance.scale    = trans.scale;
-
-                    // same write as before
-                    _batches.begin()->second[i] = instance;
-                }
-            });
+            batch.push_back(instance);
         }
 
-        // wait
-        _threadPool.Wait();
+        for (auto batchIt = _batches.begin(); batchIt != _batches.end();)
+        {
+            if (batchIt->second.empty()) {
+                batchIt = _batches.erase(batchIt);
+            }
+            else {
+                ++batchIt;
+            }
+        }
 
         auto t1 = Clock::now();
 
         size_t offset = 0; // starting point in the instance buffer
         for (auto& [mesh, instances] : _batches) {
+            if (!mesh || mesh->surfaces.empty() || instances.empty())
+                continue;
+
             auto& surface = mesh->surfaces[0];
             auto* material = surface.material;
 
@@ -655,7 +687,7 @@ void Core::DrawGeometry(VkCommandBuffer cmd)
             AllocatedImage* occlusion = material ? material->occlusionImage : nullptr;
             AllocatedImage* emissive = material ? material->emissionImage : nullptr;
 
-            if (!baseColor) baseColor = &_errorCheckerboardImage;
+            if (!baseColor) baseColor = &_greyImage;
             if (!normal) normal = &_flatNormalImage;
             if (!metallicRoughness) metallicRoughness = &_defaultMetallicRoughnessImage;
             if (!occlusion) occlusion = &_whiteImage;
@@ -747,7 +779,7 @@ void Core::DrawGeometry(VkCommandBuffer cmd)
                             0,
                             0);
 
-            //offset += dataSize; // move pointer for the next batch
+            offset += dataSize; // move pointer for the next batch
             auto t3 = Clock::now();
             auto ms = [](auto a, auto b) {
                 return std::chrono::duration<float, std::milli>(b - a).count();
@@ -767,6 +799,9 @@ void Core::DrawGeometry(VkCommandBuffer cmd)
         auto& transformComponent = registryViewSingles.get<Transform>(entity);
 
         auto meshAssetPtr = meshComponent.mesh.get();
+        if (!meshAssetPtr || meshAssetPtr->surfaces.empty())
+            continue;
+
         auto& surface = meshAssetPtr->surfaces[0];
         auto* material = surface.material;
 
@@ -776,7 +811,7 @@ void Core::DrawGeometry(VkCommandBuffer cmd)
         AllocatedImage* occlusion = material ? material->occlusionImage : nullptr;
         AllocatedImage* emissive = material ? material->emissionImage : nullptr;
 
-        if (!baseColor) baseColor = &_errorCheckerboardImage;
+        if (!baseColor) baseColor = &_greyImage;
         if (!normal) normal = &_flatNormalImage;
         if (!metallicRoughness) metallicRoughness = &_defaultMetallicRoughnessImage;
         if (!occlusion) occlusion = &_whiteImage;

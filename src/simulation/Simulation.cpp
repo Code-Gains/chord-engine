@@ -1076,13 +1076,14 @@ void Simulation::InitializeSphereSimulation()
 
 int main () {
     Engine::Core core;
+    core.SetProjectRoot("../../..");
     core.Init();
 
     std::vector<std::shared_ptr<MeshAsset>> helmetMeshes;
-    helmetMeshes = core.LoadGltfMeshes(&core, "../../../assets/DamagedHelmet.gltf").value();
+    helmetMeshes = core.LoadGltfMeshes(&core, "assets/DamagedHelmet.gltf").value();
 
     std::vector<std::shared_ptr<MeshAsset>> cubeMeshes;
-    cubeMeshes = core.LoadGltfMeshes(&core, "../../../assets/BoxTextured.gltf").value();
+    cubeMeshes = core.LoadGltfMeshes(&core, "assets/BoxTextured.gltf").value();
 
     auto& registry = core.GetRegistry();
     auto simulation = std::make_unique<Simulation>(registry);

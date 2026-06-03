@@ -236,7 +236,10 @@ private:
     bool stop = false;
     size_t activeJobs = 0;
 };
-
+// ============================================================================
+// Tags
+// ============================================================================
+struct CoreOwnedTag {};
 // ============================================================================
 // Core engine class
 // ============================================================================
@@ -250,6 +253,7 @@ private:
 
     bool _appMinimized = false;
     bool _isInitialized = false;
+    std::filesystem::path _projectRoot = std::filesystem::current_path();
 
     // ------------------------------------------------------------------------
     // Initialization steps
@@ -502,6 +506,14 @@ public:
     void Shutdown();
 
     // ------------------------------------------------------------------------
+    // Project path helpers
+    // ------------------------------------------------------------------------
+    void SetProjectRoot(std::filesystem::path root);
+    const std::filesystem::path& GetProjectRoot() const;
+    std::filesystem::path ResolveProjectPath(const std::filesystem::path& path) const;
+    std::filesystem::path MakeProjectRelative(const std::filesystem::path& path) const;
+
+    // ------------------------------------------------------------------------
     // Shared thread pool access
     // ------------------------------------------------------------------------
     static ThreadPool& GetThreadPool() {
@@ -564,7 +576,8 @@ public:
     std::vector<std::shared_ptr<MeshAsset>> LoadGltfMeshAssets(
         Core* engine,
         fastgltf::Asset& gltf,
-        size_t materialOffset
+        size_t materialOffset,
+        const std::filesystem::path& sourcePath
     );
 
     void LoadGltfPrimitive(

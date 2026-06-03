@@ -1,24 +1,53 @@
 #include "ImGuiManager.h"
 #include "ImGuiWindowRegistry.h"
+#include "Core.h"
+#include "WorldSerializer.h"
 
 #include <imgui.h>
+
+#include <algorithm>
+#include <filesystem>
+#include <string_view>
 
 ImGuiManager::ImGuiManager(entt::registry& registry)
     : System(registry)
 {
 }
 
+ImGuiManager::ImGuiManager(entt::registry& registry, Engine::Core* core)
+    : System(registry)
+    , _core(core)
+{
+}
+
 void ImGuiManager::DrawUi()
 {
     auto& windowRegistry = _registry.ctx().get<ImGuiWindowRegistry>();
+    EnsureDefaultWorldPath();
 
     if (ImGui::BeginMainMenuBar())
     {
         if (ImGui::BeginMenu("File"))
         {
             ImGui::MenuItem("New", "Ctrl+N");
-            ImGui::MenuItem("Open...", "Ctrl+O");
-            ImGui::MenuItem("Save", "Ctrl+S");
+            if (ImGui::MenuItem("Open World...", "Ctrl+O", false, _core != nullptr)) {
+                _worldFileDialogMode = WorldFileDialogMode::Open;
+                _openWorldFileDialogRequested = true;
+            }
+            if (ImGui::MenuItem("Save World", "Ctrl+S", false, _core != nullptr)) {
+                if (_hasCurrentWorldPath) {
+                    SaveWorldToPath(_core->ResolveProjectPath(_worldPathBuffer.data()));
+                } else {
+                    _worldFileDialogMode = WorldFileDialogMode::Save;
+                    _overwriteConfirmationActive = false;
+                    _openWorldFileDialogRequested = true;
+                }
+            }
+            if (ImGui::MenuItem("Save World As...", nullptr, false, _core != nullptr)) {
+                _worldFileDialogMode = WorldFileDialogMode::Save;
+                _overwriteConfirmationActive = false;
+                _openWorldFileDialogRequested = true;
+            }
             ImGui::EndMenu();
         }
 
@@ -30,4 +59,118 @@ void ImGuiManager::DrawUi()
 
         ImGui::EndMainMenuBar();
     }
+
+    if (_openWorldFileDialogRequested) {
+        ImGui::OpenPopup("World File");
+        _openWorldFileDialogRequested = false;
+    }
+
+    DrawWorldFileDialog();
+}
+
+void ImGuiManager::EnsureDefaultWorldPath()
+{
+    if (_worldPathBuffer[0] != '\0') {
+        return;
+    }
+
+    constexpr std::string_view defaultWorldPath =
+        "assets/worlds/editor_test.json";
+
+    std::copy(
+        defaultWorldPath.begin(),
+        defaultWorldPath.end(),
+        _worldPathBuffer.begin()
+    );
+}
+
+void ImGuiManager::DrawWorldFileDialog()
+{
+    if (_core == nullptr) {
+        return;
+    }
+
+    if (ImGui::BeginPopupModal("World File", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        const bool isOpenMode = _worldFileDialogMode == WorldFileDialogMode::Open;
+
+        ImGui::TextUnformatted(isOpenMode ? "Open world file" : "Save world file");
+        ImGui::SetNextItemWidth(460.0f);
+        ImGui::InputText(
+            "Path",
+            _worldPathBuffer.data(),
+            _worldPathBuffer.size()
+        );
+        if (ImGui::IsItemEdited()) {
+            _overwriteConfirmationActive = false;
+        }
+
+        ImGui::TextDisabled("Project-relative paths are resolved from the project root.");
+
+        auto worldPath = _core->ResolveProjectPath(_worldPathBuffer.data());
+
+        if (!isOpenMode &&
+            _overwriteConfirmationActive &&
+            std::filesystem::exists(worldPath))
+        {
+            ImGui::Separator();
+            ImGui::TextColored(
+                ImVec4(1.0f, 0.35f, 0.25f, 1.0f),
+                "This world already exists."
+            );
+
+            if (ImGui::Button("Overwrite")) {
+                if (SaveWorldToPath(worldPath)) {
+                    _hasCurrentWorldPath = true;
+                    _worldFileDialogMode = WorldFileDialogMode::None;
+                    _overwriteConfirmationActive = false;
+                    ImGui::CloseCurrentPopup();
+                }
+            }
+
+            ImGui::SameLine();
+
+            if (ImGui::Button("Cancel Overwrite")) {
+                _overwriteConfirmationActive = false;
+            }
+        } else if (ImGui::Button(isOpenMode ? "Open" : "Save")) {
+            Engine::WorldSerializer serializer;
+
+            if (isOpenMode) {
+                if (serializer.LoadWorld(*_core, worldPath)) {
+                    _hasCurrentWorldPath = true;
+                    _worldFileDialogMode = WorldFileDialogMode::None;
+                    ImGui::CloseCurrentPopup();
+                }
+            } else {
+                if (std::filesystem::exists(worldPath)) {
+                    _overwriteConfirmationActive = true;
+                } else if (SaveWorldToPath(worldPath)) {
+                    _hasCurrentWorldPath = true;
+                    _worldFileDialogMode = WorldFileDialogMode::None;
+                    ImGui::CloseCurrentPopup();
+                }
+            }
+        }
+
+        ImGui::SameLine();
+
+        if (ImGui::Button("Cancel")) {
+            _worldFileDialogMode = WorldFileDialogMode::None;
+            _overwriteConfirmationActive = false;
+            ImGui::CloseCurrentPopup();
+        }
+
+        ImGui::EndPopup();
+    }
+}
+
+bool ImGuiManager::SaveWorldToPath(const std::filesystem::path& worldPath)
+{
+    if (_core == nullptr) {
+        return false;
+    }
+
+    std::filesystem::create_directories(worldPath.parent_path());
+    Engine::WorldSerializer serializer;
+    return serializer.SaveWorld(*_core, worldPath);
 }

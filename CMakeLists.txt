@@ -131,6 +131,47 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(entt)
 
 # ---------------------
+# nlohmann_json
+# ---------------------
+FetchContent_Declare(
+    nlohmann_json
+    GIT_REPOSITORY https://github.com/nlohmann/json.git
+    GIT_TAG v3.11.3
+)
+FetchContent_MakeAvailable(nlohmann_json)
+
+# ---------------------
+# cereal
+# ---------------------
+FetchContent_Declare(
+    cereal
+    GIT_REPOSITORY https://github.com/USCiLab/cereal.git
+    GIT_TAG v1.3.2
+)
+
+FetchContent_GetProperties(cereal)
+
+if(NOT cereal_POPULATED)
+    message(STATUS "Fetching cereal v1.3.2...")
+    FetchContent_Populate(cereal)
+endif()
+
+# ---------------------
+# Jolt Physics
+# ---------------------
+set(JPH_BUILD_SAMPLES OFF CACHE BOOL "" FORCE)
+set(JPH_BUILD_UNIT_TESTS OFF CACHE BOOL "" FORCE)
+set(JPH_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+
+FetchContent_Declare(
+    JoltPhysics
+    GIT_REPOSITORY https://github.com/jrouwe/JoltPhysics.git
+    GIT_TAG v5.5.0
+    SOURCE_SUBDIR Build
+)
+FetchContent_MakeAvailable(JoltPhysics)
+
+# ---------------------
 # Shaders
 # ---------------------
 set(SHADER_DIR "${CMAKE_SOURCE_DIR}/shaders" CACHE PATH "Shader directory")
