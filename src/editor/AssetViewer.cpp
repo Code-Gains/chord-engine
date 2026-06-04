@@ -246,6 +246,7 @@ void AssetViewer::LoadSelectedWorld()
     const auto worldPath = _core->ResolveProjectPath(_selectedAssetFile);
 
     if (serializer.LoadWorld(*_core, worldPath)) {
+        _core->SetCurrentWorldPath(_selectedAssetFile);
         _statusText = "Loaded world " + _selectedAssetFile;
     }
     else {

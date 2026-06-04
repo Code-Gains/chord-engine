@@ -27,6 +27,7 @@ private:
     };
 
     void EnsureDefaultWorldPath();
+    void SetWorldPathBuffer(const std::filesystem::path& path);
     void DrawWorldFileDialog();
     bool SaveWorldToPath(const std::filesystem::path& worldPath);
 
@@ -34,6 +35,5 @@ private:
     std::array<char, 512> _worldPathBuffer {};
     WorldFileDialogMode _worldFileDialogMode = WorldFileDialogMode::None;
     bool _openWorldFileDialogRequested = false;
-    bool _hasCurrentWorldPath = false;
     bool _overwriteConfirmationActive = false;
 };

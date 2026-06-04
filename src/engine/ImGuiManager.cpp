@@ -6,6 +6,7 @@
 #include <imgui.h>
 
 #include <algorithm>
+#include <cstring>
 #include <filesystem>
 #include <string_view>
 
@@ -35,8 +36,8 @@ void ImGuiManager::DrawUi()
                 _openWorldFileDialogRequested = true;
             }
             if (ImGui::MenuItem("Save World", "Ctrl+S", false, _core != nullptr)) {
-                if (_hasCurrentWorldPath) {
-                    SaveWorldToPath(_core->ResolveProjectPath(_worldPathBuffer.data()));
+                if (_core->GetCurrentWorldPath().has_value()) {
+                    SaveWorldToPath(_core->ResolveProjectPath(_core->GetCurrentWorldPath().value()));
                 } else {
                     _worldFileDialogMode = WorldFileDialogMode::Save;
                     _overwriteConfirmationActive = false;
@@ -103,6 +104,17 @@ void ImGuiManager::DrawUi()
 
 void ImGuiManager::EnsureDefaultWorldPath()
 {
+    if (_worldFileDialogMode == WorldFileDialogMode::None &&
+        _core &&
+        _core->GetCurrentWorldPath().has_value())
+    {
+        const auto currentPath = _core->GetCurrentWorldPath().value();
+        if (std::string(_worldPathBuffer.data()) != currentPath.generic_string()) {
+            SetWorldPathBuffer(currentPath);
+        }
+        return;
+    }
+
     if (_worldPathBuffer[0] != '\0') {
         return;
     }
@@ -110,10 +122,17 @@ void ImGuiManager::EnsureDefaultWorldPath()
     constexpr std::string_view defaultWorldPath =
         "assets/worlds/editor_test.json";
 
-    std::copy(
-        defaultWorldPath.begin(),
-        defaultWorldPath.end(),
-        _worldPathBuffer.begin()
+    SetWorldPathBuffer(defaultWorldPath.data());
+}
+
+void ImGuiManager::SetWorldPathBuffer(const std::filesystem::path& path)
+{
+    const auto pathString = path.generic_string();
+    std::fill(_worldPathBuffer.begin(), _worldPathBuffer.end(), '\0');
+    std::strncpy(
+        _worldPathBuffer.data(),
+        pathString.c_str(),
+        _worldPathBuffer.size() - 1
     );
 }
 
@@ -153,7 +172,7 @@ void ImGuiManager::DrawWorldFileDialog()
 
             if (ImGui::Button("Overwrite")) {
                 if (SaveWorldToPath(worldPath)) {
-                    _hasCurrentWorldPath = true;
+                    _core->SetCurrentWorldPath(_worldPathBuffer.data());
                     _worldFileDialogMode = WorldFileDialogMode::None;
                     _overwriteConfirmationActive = false;
                     ImGui::CloseCurrentPopup();
@@ -169,7 +188,7 @@ void ImGuiManager::DrawWorldFileDialog()
             if (isOpenMode) {
                 auto serializer = _core->CreateWorldSerializer();
                 if (serializer.LoadWorld(*_core, worldPath)) {
-                    _hasCurrentWorldPath = true;
+                    _core->SetCurrentWorldPath(_worldPathBuffer.data());
                     _worldFileDialogMode = WorldFileDialogMode::None;
                     ImGui::CloseCurrentPopup();
                 }
@@ -177,7 +196,7 @@ void ImGuiManager::DrawWorldFileDialog()
                 if (std::filesystem::exists(worldPath)) {
                     _overwriteConfirmationActive = true;
                 } else if (SaveWorldToPath(worldPath)) {
-                    _hasCurrentWorldPath = true;
+                    _core->SetCurrentWorldPath(_worldPathBuffer.data());
                     _worldFileDialogMode = WorldFileDialogMode::None;
                     ImGui::CloseCurrentPopup();
                 }

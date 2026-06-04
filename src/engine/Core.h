@@ -266,6 +266,7 @@ private:
     std::filesystem::path _projectRoot = std::filesystem::current_path();
     EditorMode _editorMode = EditorMode::Edit;
     nlohmann::json _playModeSnapshot;
+    std::optional<std::filesystem::path> _currentWorldPath;
     std::vector<std::function<void(ComponentSerializerRegistry&)>> _componentSerializerSetups;
 
     // ------------------------------------------------------------------------
@@ -537,6 +538,9 @@ public:
     bool IsPlayMode() const;
     void StartPlayMode();
     void StopPlayMode();
+    const std::optional<std::filesystem::path>& GetCurrentWorldPath() const;
+    void SetCurrentWorldPath(std::filesystem::path path);
+    void ClearCurrentWorldPath();
     void RegisterComponentSerializers(std::function<void(ComponentSerializerRegistry&)> setup);
     WorldSerializer CreateWorldSerializer() const;
 

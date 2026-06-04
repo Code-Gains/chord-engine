@@ -146,6 +146,25 @@ void Core::StopPlayMode()
     _editorMode = EditorMode::Edit;
 }
 
+const std::optional<std::filesystem::path>& Core::GetCurrentWorldPath() const
+{
+    return _currentWorldPath;
+}
+
+void Core::SetCurrentWorldPath(std::filesystem::path path)
+{
+    if (path.is_absolute()) {
+        path = MakeProjectRelative(path);
+    }
+
+    _currentWorldPath = std::move(path);
+}
+
+void Core::ClearCurrentWorldPath()
+{
+    _currentWorldPath = std::nullopt;
+}
+
 void Core::RegisterComponentSerializers(std::function<void(ComponentSerializerRegistry&)> setup)
 {
     _componentSerializerSetups.push_back(std::move(setup));
