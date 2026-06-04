@@ -32,6 +32,7 @@
 #include <fastgltf/core.hpp>
 #include <fastgltf/glm_element_traits.hpp>
 #include <fastgltf/tools.hpp>
+#include <nlohmann/json.hpp>
 
 // ============================================================================
 // Project headers
@@ -51,6 +52,14 @@
 #pragma clang diagnostic pop
 
 namespace Engine {
+
+class ComponentSerializerRegistry;
+class WorldSerializer;
+
+enum class EditorMode {
+    Edit,
+    Play
+};
 
 // ============================================================================
 // Render data / GPU structs
@@ -253,7 +262,11 @@ private:
 
     bool _appMinimized = false;
     bool _isInitialized = false;
+    std::filesystem::path _engineRoot = std::filesystem::current_path();
     std::filesystem::path _projectRoot = std::filesystem::current_path();
+    EditorMode _editorMode = EditorMode::Edit;
+    nlohmann::json _playModeSnapshot;
+    std::vector<std::function<void(ComponentSerializerRegistry&)>> _componentSerializerSetups;
 
     // ------------------------------------------------------------------------
     // Initialization steps
@@ -275,6 +288,7 @@ private:
     void InitPrefilterPipeline();
     void InitIrradiancePipeline();
     void InitBRDFLUTPipeline();
+    bool LoadEngineShaderModule(const std::filesystem::path& path, VkShaderModule* outShaderModule);
 
     // ------------------------------------------------------------------------
     // Vulkan instance / device / surface
@@ -369,6 +383,7 @@ private:
     // ------------------------------------------------------------------------
     // Main drawing flow
     // ------------------------------------------------------------------------
+    entt::entity ResolveRenderCameraEntity();
     void Draw();
     void DrawUi();
 
@@ -506,12 +521,24 @@ public:
     void Shutdown();
 
     // ------------------------------------------------------------------------
-    // Project path helpers
+    // Engine/project path helpers
     // ------------------------------------------------------------------------
+    void SetEngineRoot(std::filesystem::path root);
+    const std::filesystem::path& GetEngineRoot() const;
+    std::filesystem::path ResolveEnginePath(const std::filesystem::path& path) const;
+    std::filesystem::path MakeEngineRelative(const std::filesystem::path& path) const;
+
     void SetProjectRoot(std::filesystem::path root);
     const std::filesystem::path& GetProjectRoot() const;
     std::filesystem::path ResolveProjectPath(const std::filesystem::path& path) const;
     std::filesystem::path MakeProjectRelative(const std::filesystem::path& path) const;
+
+    EditorMode GetEditorMode() const;
+    bool IsPlayMode() const;
+    void StartPlayMode();
+    void StopPlayMode();
+    void RegisterComponentSerializers(std::function<void(ComponentSerializerRegistry&)> setup);
+    WorldSerializer CreateWorldSerializer() const;
 
     // ------------------------------------------------------------------------
     // Shared thread pool access
@@ -551,6 +578,11 @@ public:
     // GLTF loading
     // ------------------------------------------------------------------------
     std::optional<std::vector<std::shared_ptr<MeshAsset>>> LoadGltfMeshes(
+        Core* engine,
+        std::filesystem::path filePath
+    );
+
+    std::optional<std::vector<std::shared_ptr<MeshAsset>>> LoadEngineGltfMeshes(
         Core* engine,
         std::filesystem::path filePath
     );

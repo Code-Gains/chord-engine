@@ -10,6 +10,7 @@ using Clock = std::chrono::high_resolution_clock;
 #include "Camera.h"
 #include "CameraSystem.h"
 #include "NameComponent.h"
+#include "WorldSerializer.h"
 
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
@@ -42,6 +43,40 @@ ThreadPool Core::_threadPool{std::thread::hardware_concurrency()};
 
 Core::Core()
 {
+}
+
+void Core::SetEngineRoot(std::filesystem::path root)
+{
+    _engineRoot = std::filesystem::weakly_canonical(std::move(root));
+}
+
+const std::filesystem::path& Core::GetEngineRoot() const
+{
+    return _engineRoot;
+}
+
+std::filesystem::path Core::ResolveEnginePath(const std::filesystem::path& path) const
+{
+    if (path.is_absolute()) {
+        return path;
+    }
+
+    return _engineRoot / path;
+}
+
+std::filesystem::path Core::MakeEngineRelative(const std::filesystem::path& path) const
+{
+    std::filesystem::path resolvedPath =
+        path.is_absolute() ? path : std::filesystem::weakly_canonical(path);
+
+    std::error_code error;
+    auto relativePath = std::filesystem::relative(resolvedPath, _engineRoot, error);
+
+    if (error || relativePath.empty()) {
+        return path.generic_string();
+    }
+
+    return relativePath.generic_string();
 }
 
 void Core::SetProjectRoot(std::filesystem::path root)
@@ -78,6 +113,55 @@ std::filesystem::path Core::MakeProjectRelative(const std::filesystem::path& pat
     return relativePath.generic_string();
 }
 
+EditorMode Core::GetEditorMode() const
+{
+    return _editorMode;
+}
+
+bool Core::IsPlayMode() const
+{
+    return _editorMode == EditorMode::Play;
+}
+
+void Core::StartPlayMode()
+{
+    if (_editorMode == EditorMode::Play) {
+        return;
+    }
+
+    auto serializer = CreateWorldSerializer();
+    _playModeSnapshot = serializer.SaveWorldToJson(*this);
+    _editorMode = EditorMode::Play;
+}
+
+void Core::StopPlayMode()
+{
+    if (_editorMode == EditorMode::Edit) {
+        return;
+    }
+
+    auto serializer = CreateWorldSerializer();
+    serializer.LoadWorldFromJson(*this, _playModeSnapshot);
+    _playModeSnapshot = nlohmann::json();
+    _editorMode = EditorMode::Edit;
+}
+
+void Core::RegisterComponentSerializers(std::function<void(ComponentSerializerRegistry&)> setup)
+{
+    _componentSerializerSetups.push_back(std::move(setup));
+}
+
+WorldSerializer Core::CreateWorldSerializer() const
+{
+    WorldSerializer serializer;
+
+    for (const auto& setup : _componentSerializerSetups) {
+        setup(serializer.ComponentSerializers());
+    }
+
+    return serializer;
+}
+
 void Core::Init()
 {
 #ifdef DEBUG
@@ -85,15 +169,6 @@ void Core::Init()
 #else
     ENGINE_LOG_INFO("Engine initializing in RELEASE mode!");
 #endif
-    // temp camera set up TODO FIX
-    auto cameraEntity = _registry.create();
-    auto& cameraTransform = _registry.emplace<Transform>(cameraEntity);
-    cameraTransform.position = { 0.0f, 0.0f, 10.0f };
-    cameraTransform.rotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
-    auto& camera = _registry.emplace<Camera>(cameraEntity);
-    auto nameComponent = NameComponent("Camera");
-    _registry.emplace<NameComponent>(cameraEntity, nameComponent);
-
     auto inputEntity = _registry.create();
     _registry.emplace<InputState>(inputEntity);
 
@@ -116,7 +191,7 @@ void Core::Init()
     // Core systems
     _systems.push_back(std::make_unique<EcsDebugger>(_registry));
     _systems.push_back(std::make_unique<InputSystem>(_registry, inputEntity, _window.get()));
-    _systems.push_back(std::make_unique<CameraSystem>(_registry));
+    _systems.push_back(std::make_unique<CameraSystem>(_registry, this));
 
     //everything went fine
     _isInitialized = true;
@@ -250,12 +325,48 @@ void Core::Run() {
     Shutdown();
 }
 
+entt::entity Core::ResolveRenderCameraEntity()
+{
+    if (IsPlayMode()) {
+        auto playCameraView =
+            _registry.view<Camera, Transform, ActiveCameraTag>(entt::exclude<CoreOwnedTag>);
+
+        if (playCameraView.begin() != playCameraView.end()) {
+            return *playCameraView.begin();
+        }
+
+        return entt::null;
+    }
+
+    auto pilotCameraView =
+        _registry.view<Camera, Transform, EditorCameraPilotTag>(entt::exclude<CoreOwnedTag>);
+
+    if (pilotCameraView.begin() != pilotCameraView.end()) {
+        return *pilotCameraView.begin();
+    }
+
+    auto editorCameraView = _registry.view<Camera, Transform, ActiveCameraTag, CoreOwnedTag>();
+    if (editorCameraView.begin() != editorCameraView.end()) {
+        return *editorCameraView.begin();
+    }
+
+    auto sceneCameraView =
+        _registry.view<Camera, Transform, ActiveCameraTag>(entt::exclude<CoreOwnedTag>);
+
+    if (sceneCameraView.begin() != sceneCameraView.end()) {
+        return *sceneCameraView.begin();
+    }
+
+    return entt::null;
+}
+
 void Core::Draw()
 {
-    auto registryView = _registry.view<Camera>();
-
-    auto cameraEntity = *registryView.begin();
-    auto& camera = registryView.get<Camera>(cameraEntity);
+    auto cameraEntity = ResolveRenderCameraEntity();
+    Camera* camera = nullptr;
+    if (cameraEntity != entt::null && _registry.valid(cameraEntity)) {
+        camera = _registry.try_get<Camera>(cameraEntity);
+    }
 
     FrameData& frameData = GetCurrentFrame();
     //wait until the gpu has finished rendering the last frame. Timeout of 1 second
@@ -345,9 +456,9 @@ void Core::Draw()
     vkutil::transition_image(cmd, _depthImage.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL);
     DrawGeometry(cmd);
     { // TODO move to some other file
-        if (camera.screenshotRequested)
+        if (camera && camera->screenshotRequested)
         {
-                camera.screenshotRequested = false;
+                camera->screenshotRequested = false;
 
             // 1. Transition draw image to transfer source
             vkutil::transition_image(cmd, _drawImage.image,
@@ -490,17 +601,22 @@ void Core::DrawUi()
 void Core::DrawBackground(VkCommandBuffer cmd)
 {
     // //make a clear-color from frame number. This will flash with a 120 frame period.
-    VkClearColorValue clearValue;
-    auto registryView = _registry.view<Camera>();
+    VkClearColorValue clearValue {};
+    clearValue.float32[0] = 0.1f;
+    clearValue.float32[1] = 0.1f;
+    clearValue.float32[2] = 0.5f;
+    clearValue.float32[3] = 1.0f;
 
-    if (!registryView.empty()) {
-        auto cameraEntity = *registryView.begin();
-        auto& camera = registryView.get<Camera>(cameraEntity);
+    auto cameraEntity = ResolveRenderCameraEntity();
+    if (cameraEntity != entt::null && _registry.valid(cameraEntity)) {
+        auto* camera = _registry.try_get<Camera>(cameraEntity);
 
-        clearValue.float32[0] = camera.clearColor.r;
-        clearValue.float32[1] = camera.clearColor.g;
-        clearValue.float32[2] = camera.clearColor.b;
-        clearValue.float32[3] = camera.clearColor.a;
+        if (camera) {
+            clearValue.float32[0] = camera->clearColor.r;
+            clearValue.float32[1] = camera->clearColor.g;
+            clearValue.float32[2] = camera->clearColor.b;
+            clearValue.float32[3] = camera->clearColor.a;
+        }
     }
 
     VkImageSubresourceRange clearRange = vkinit::image_subresource_range(VK_IMAGE_ASPECT_COLOR_BIT);
@@ -511,17 +627,15 @@ void Core::DrawBackground(VkCommandBuffer cmd)
 
 void Core::DrawGeometry(VkCommandBuffer cmd)
 {
-    glm::mat4 viewMatrix;;
-    glm::mat4 projectionMatrix;
-    auto registryView = _registry.view<Camera, Transform>();
-
-    for (auto entity : registryView) {
-        auto& camera = registryView.get<Camera>(entity);
-        auto& transform = registryView.get<Transform>(entity);
-
-        viewMatrix = camera.GetViewMatrix(transform);
-        projectionMatrix = camera.GetProjectionMatrix();
+    auto cameraEntity = ResolveRenderCameraEntity();
+    if (cameraEntity == entt::null || !_registry.valid(cameraEntity) || !_registry.all_of<Camera, Transform>(cameraEntity)) {
+        return;
     }
+
+    auto& renderCamera = _registry.get<Camera>(cameraEntity);
+    auto& renderCameraTransform = _registry.get<Transform>(cameraEntity);
+    glm::mat4 viewMatrix = renderCamera.GetViewMatrix(renderCameraTransform);
+    glm::mat4 projectionMatrix = renderCamera.GetProjectionMatrix();
 
     //allocate a new uniform buffer for the scene data
     AllocatedBuffer gpuSceneDataBuffer = CreateBuffer(sizeof(GPUSceneData), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU);
@@ -551,12 +665,7 @@ void Core::DrawGeometry(VkCommandBuffer cmd)
         sceneData.ambientColor = glm::vec4(0.0f);
     }
 
-    auto cameraView = _registry.view<Camera, Transform>();
-    if (cameraView.begin() != cameraView.end()) {
-        auto cameraEntity = *cameraView.begin();
-        auto& transform = cameraView.get<Transform>(cameraEntity);
-        sceneData.cameraPosition = glm::vec4(transform.position, 1.0f);
-    }
+    sceneData.cameraPosition = glm::vec4(renderCameraTransform.position, 1.0f);
 
     //write the buffer
     GPUSceneData* sceneUniformData = (GPUSceneData*)gpuSceneDataBuffer.allocation->GetMappedData();

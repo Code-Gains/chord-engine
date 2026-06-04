@@ -10,6 +10,7 @@ class RegistryViewer : public System {
     virtual void Draw() override {};
 
     entt::entity _selectedEntity{ entt::null };
+    bool _showCoreOwnedEntities = false;
 
 
 public:

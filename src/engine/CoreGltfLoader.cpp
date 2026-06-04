@@ -21,6 +21,23 @@ std::optional<std::vector<std::shared_ptr<MeshAsset>>> Core::LoadGltfMeshes(Core
     return LoadGltfMeshAssets(engine, gltf, materialOffset, sourcePath);
 }
 
+std::optional<std::vector<std::shared_ptr<MeshAsset>>> Core::LoadEngineGltfMeshes(Core* engine, std::filesystem::path filePath)
+{
+    auto resolvedPath = ResolveEnginePath(filePath);
+    auto sourcePath = MakeEngineRelative(resolvedPath);
+
+    auto loadResult = LoadGltfAsset(resolvedPath);
+    if (!loadResult.has_value()) {
+        return std::nullopt;
+    }
+    auto& gltf = loadResult.value();
+
+    size_t imageOffset = LoadGltfImages(gltf);
+    size_t materialOffset = LoadGltfMaterials(gltf, imageOffset);
+
+    return LoadGltfMeshAssets(engine, gltf, materialOffset, sourcePath);
+}
+
 std::optional<AllocatedImage> Core::LoadGltfImage(fastgltf::Asset &asset, fastgltf::Image &image)
 {
     AllocatedImage newImage{};

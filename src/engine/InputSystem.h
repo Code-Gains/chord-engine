@@ -18,6 +18,8 @@ struct InputState {
 
     double deltaX = 0.0;
     double deltaY = 0.0;
+    double scrollX = 0.0;
+    double scrollY = 0.0;
 };
 
 class InputSystem : public System {
@@ -30,9 +32,13 @@ public:
     void AddKeyToMonitor(int key) { _monitoredKeys.push_back(key); }
 
 private:
+    void OnScroll(double xOffset, double yOffset);
+
     std::vector<int> _monitoredKeys;
     std::vector<int> _monitoredMouseButtons;
     entt::entity _inputEntity;
     GLFWwindow* _window;
     Engine::WindowGLFW* _engineWindow;
+    double _pendingScrollX = 0.0;
+    double _pendingScrollY = 0.0;
 };

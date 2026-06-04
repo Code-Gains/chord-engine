@@ -14,13 +14,19 @@ InputSystem::InputSystem(entt::registry& registry, entt::entity inputEntity, Eng
         GLFW_KEY_RIGHT_ALT,
         GLFW_KEY_ENTER,
         GLFW_KEY_SPACE,
-        GLFW_KEY_LEFT_SHIFT
+        GLFW_KEY_LEFT_SHIFT,
+        GLFW_KEY_F,
+        GLFW_KEY_ESCAPE
     };
      _monitoredMouseButtons = {
         GLFW_MOUSE_BUTTON_LEFT,
         GLFW_MOUSE_BUTTON_RIGHT,
         GLFW_MOUSE_BUTTON_MIDDLE
     };
+
+    _engineWindow->SetScrollCallback([this](double xOffset, double yOffset) {
+        OnScroll(xOffset, yOffset);
+    });
 }
 
 void InputSystem::Update(float deltaTime)
@@ -35,6 +41,10 @@ void InputSystem::Update(float deltaTime)
 
     inputState.mouseX = x;
     inputState.mouseY = y;
+    inputState.scrollX = _pendingScrollX;
+    inputState.scrollY = _pendingScrollY;
+    _pendingScrollX = 0.0;
+    _pendingScrollY = 0.0;
 
     for (int key : _monitoredKeys) {
         KeyState& state = inputState.keys[key];
@@ -64,6 +74,12 @@ void InputSystem::Update(float deltaTime)
             _engineWindow->ToggleMaximize();
         }
     }
+}
+
+void InputSystem::OnScroll(double xOffset, double yOffset)
+{
+    _pendingScrollX += xOffset;
+    _pendingScrollY += yOffset;
 }
 
 // void InputSystem::Update(InputState &input, GLFWwindow *window)

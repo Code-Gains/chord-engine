@@ -311,8 +311,8 @@ void Core::InitDefaultData()
         DestroyBuffer(rectangle.vertexBuffer);
     });
 
-    _testMeshes = LoadGltfMeshes(this,"assets/basicmesh.glb").value();
-    auto tempMeshes = LoadGltfMeshes(this,"assets/tetrahedron.glb").value();
+    _testMeshes = LoadEngineGltfMeshes(this,"assets/basicmesh.glb").value();
+    auto tempMeshes = LoadEngineGltfMeshes(this,"assets/tetrahedron.glb").value();
     _testMeshes.insert(
         _testMeshes.end(),              // insert at the end of _testMeshes
         tempMeshes.begin(),             // start of tempMeshes

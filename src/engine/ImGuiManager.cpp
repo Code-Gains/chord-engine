@@ -51,6 +51,39 @@ void ImGuiManager::DrawUi()
             ImGui::EndMenu();
         }
 
+        if (ImGui::BeginMenu("Game"))
+        {
+            const bool isPlayMode = _core != nullptr && _core->IsPlayMode();
+
+            if (isPlayMode) {
+                ImGui::BeginDisabled();
+            }
+
+            if (ImGui::MenuItem("Play", nullptr, false, _core != nullptr && !isPlayMode)) {
+                _core->StartPlayMode();
+            }
+
+            if (isPlayMode) {
+                ImGui::EndDisabled();
+            }
+
+            if (!isPlayMode) {
+                ImGui::BeginDisabled();
+            }
+
+            if (ImGui::MenuItem("Stop", nullptr, false, _core != nullptr && isPlayMode)) {
+                _core->StopPlayMode();
+            }
+
+            if (!isPlayMode) {
+                ImGui::EndDisabled();
+            }
+
+            ImGui::Separator();
+            ImGui::TextDisabled(isPlayMode ? "Mode: Play" : "Mode: Edit");
+            ImGui::EndMenu();
+        }
+
         if (ImGui::BeginMenu("Window"))
         {
             windowRegistry.DrawMenuItems();
@@ -133,9 +166,8 @@ void ImGuiManager::DrawWorldFileDialog()
                 _overwriteConfirmationActive = false;
             }
         } else if (ImGui::Button(isOpenMode ? "Open" : "Save")) {
-            Engine::WorldSerializer serializer;
-
             if (isOpenMode) {
+                auto serializer = _core->CreateWorldSerializer();
                 if (serializer.LoadWorld(*_core, worldPath)) {
                     _hasCurrentWorldPath = true;
                     _worldFileDialogMode = WorldFileDialogMode::None;
@@ -171,6 +203,6 @@ bool ImGuiManager::SaveWorldToPath(const std::filesystem::path& worldPath)
     }
 
     std::filesystem::create_directories(worldPath.parent_path());
-    Engine::WorldSerializer serializer;
+    auto serializer = _core->CreateWorldSerializer();
     return serializer.SaveWorld(*_core, worldPath);
 }

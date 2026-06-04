@@ -181,6 +181,8 @@ public:
 
     bool SaveWorld(Core& core, const std::filesystem::path& path) const;
     bool LoadWorld(Core& core, const std::filesystem::path& path) const;
+    nlohmann::json SaveWorldToJson(Core& core) const;
+    bool LoadWorldFromJson(Core& core, const nlohmann::json& root) const;
 
     ComponentSerializerRegistry& ComponentSerializers();
     const ComponentSerializerRegistry& ComponentSerializers() const;

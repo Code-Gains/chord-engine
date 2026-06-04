@@ -25,6 +25,7 @@ layout (location = 0) out vec4 outFragColor;
 
 const float PI = 3.14159265359;
 const float MIN_ROUGHNESS = 0.04;
+const float IBL_INTENSITY = 0.25;
 
 vec3 fresnelSchlick(vec3 F0, vec3 F90, float VdotH)
 {
@@ -197,7 +198,7 @@ void main()
     vec3 diffuseIBL =
         irradiance * diffuseColor * ao;
     
-    color += diffuseIBL;
+    color += diffuseIBL * IBL_INTENSITY;
 
     // outFragColor = vec4(vec3(reflectionLod / maxReflectionLod), 1.0);
     // return;

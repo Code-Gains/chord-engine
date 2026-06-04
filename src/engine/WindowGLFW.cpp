@@ -29,6 +29,12 @@ namespace Engine {
             }
         });
         glfwSetWindowUserPointer(_window, this);
+        glfwSetScrollCallback(_window, [](GLFWwindow* window, double xOffset, double yOffset) {
+            auto win = reinterpret_cast<Engine::WindowGLFW*>(glfwGetWindowUserPointer(window));
+            if (win) {
+                win->HandleScroll(xOffset, yOffset);
+            }
+        });
         //glfwSetInputMode(_window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
         ENGINE_LOG_INFO("Window created");
     }
@@ -101,5 +107,17 @@ namespace Engine {
         }
         glfwSetWindowMonitor(_window, nullptr, _windowedX, _windowedY, _windowedWidth, _windowedHeight, 0);
         _isFullscreen = false;
+    }
+
+    void WindowGLFW::SetScrollCallback(std::function<void(double, double)> callback)
+    {
+        _scrollCallback = std::move(callback);
+    }
+
+    void WindowGLFW::HandleScroll(double xOffset, double yOffset)
+    {
+        if (_scrollCallback) {
+            _scrollCallback(xOffset, yOffset);
+        }
     }
 } // namespace engine

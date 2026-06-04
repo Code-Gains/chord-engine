@@ -3,6 +3,13 @@
 #include "vk_initializers.h"
 
 namespace Engine {
+bool Core::LoadEngineShaderModule(const std::filesystem::path& path, VkShaderModule* outShaderModule)
+{
+    const auto resolvedPath = ResolveEnginePath(path);
+    const auto shaderPath = resolvedPath.string();
+    return vkutil::load_shader_module(shaderPath.c_str(), _device, outShaderModule);
+}
+
 void Core::InitBackgroundPipelines()
 {
     VkPipelineLayoutCreateInfo computeLayout{};
@@ -25,13 +32,13 @@ void Core::InitBackgroundPipelines()
     // if (!vkutil::load_shader_module("../../../shaders/gradient_color.comp.spv", _device, &gradientShader)) {
     //     ENGINE_LOG_ERROR("Error when building the compute shader");
     // }
-    if (!vkutil::load_shader_module("../../../shaders/gradient.comp.spv", _device, &gradientShader)) {
+    if (!LoadEngineShaderModule("shaders/gradient.comp.spv", &gradientShader)) {
         ENGINE_LOG_ERROR("Error when building the compute shader");
     }
 
 
     VkShaderModule skyShader;
-    if (!vkutil::load_shader_module("../../../shaders/sky.comp.spv", _device, &skyShader)) {
+    if (!LoadEngineShaderModule("shaders/sky.comp.spv", &skyShader)) {
         ENGINE_LOG_ERROR("Error when building the compute shader");
     }
 
@@ -93,11 +100,11 @@ void Core::InitMeshPipeline() {
     assert(_multiImageDescriptorLayout != VK_NULL_HANDLE);
     assert(_gpuSceneDataDescriptorLayout != VK_NULL_HANDLE);
     VkShaderModule triangleFragShader;
-    if (!vkutil::load_shader_module("../../../shaders/colored_triangle.frag.spv", _device, &triangleFragShader))
+    if (!LoadEngineShaderModule("shaders/colored_triangle.frag.spv", &triangleFragShader))
         ENGINE_LOG_ERROR("Error when building the triangle fragment shader module");
 
     VkShaderModule triangleVertexShader;
-    if (!vkutil::load_shader_module("../../../shaders/colored_triangle_mesh.vert.spv", _device, &triangleVertexShader))
+    if (!LoadEngineShaderModule("shaders/colored_triangle_mesh.vert.spv", &triangleVertexShader))
         ENGINE_LOG_ERROR("Error when building the triangle vertex shader module");
     // if (!vkutil::load_shader_module("../../../shaders/batch_color_mesh.vert.spv", _device, &triangleVertexShader))
     //     ENGINE_LOG_ERROR("Error when building the triangle vertex shader module");
@@ -160,12 +167,12 @@ void Core::InitMeshPipeline() {
 
 void Core::InitInstancedMeshPipeline() {
     VkShaderModule triangleFragShader;
-    if (!vkutil::load_shader_module("../../../shaders/colored_triangle.frag.spv", _device, &triangleFragShader))
+    if (!LoadEngineShaderModule("shaders/colored_triangle.frag.spv", &triangleFragShader))
         ENGINE_LOG_ERROR("Error when building the triangle fragment shader module");
 
 
     VkShaderModule triangleVertexShader;
-    if (!vkutil::load_shader_module("../../../shaders/batch_color_mesh.vert.spv", _device, &triangleVertexShader))
+    if (!LoadEngineShaderModule("shaders/batch_color_mesh.vert.spv", &triangleVertexShader))
         ENGINE_LOG_ERROR("Error when building the triangle vertex shader module");
 
     VkPushConstantRange bufferRange{};
@@ -229,11 +236,11 @@ void Core::InitInstancedMeshPipeline() {
 void Core::InitSkyboxPipeline()
 {
     VkShaderModule skyboxFragShader;
-    if (!vkutil::load_shader_module("../../../shaders/skybox.frag.spv", _device, &skyboxFragShader))
+    if (!LoadEngineShaderModule("shaders/skybox.frag.spv", &skyboxFragShader))
         ENGINE_LOG_ERROR("Error when building the skybox fragment shader module");
 
     VkShaderModule skyboxVertexShader;
-    if (!vkutil::load_shader_module("../../../shaders/skybox.vert.spv", _device, &skyboxVertexShader))
+    if (!LoadEngineShaderModule("shaders/skybox.vert.spv", &skyboxVertexShader))
         ENGINE_LOG_ERROR("Error when building the skybox vertex shader module");
 
     VkPushConstantRange bufferRange{};
@@ -286,12 +293,12 @@ void Core::InitSkyboxPipeline()
 void Core::InitPrefilterPipeline()
 {
     VkShaderModule fragShader;
-    if (!vkutil::load_shader_module("../../../shaders/prefilter.frag.spv", _device, &fragShader)) {
+    if (!LoadEngineShaderModule("shaders/prefilter.frag.spv", &fragShader)) {
         ENGINE_LOG_ERROR("Error when building prefilter fragment shader module");
     }
 
     VkShaderModule vertShader;
-    if (!vkutil::load_shader_module("../../../shaders/prefilter.vert.spv", _device, &vertShader)) {
+    if (!LoadEngineShaderModule("shaders/prefilter.vert.spv", &vertShader)) {
         ENGINE_LOG_ERROR("Error when building prefilter vertex shader module");
     }
 
@@ -347,10 +354,10 @@ void Core::InitPrefilterPipeline()
 void Core::InitIrradiancePipeline()
 {
     VkShaderModule fragShader;
-    vkutil::load_shader_module("../../../shaders/irradiance.frag.spv", _device, &fragShader);
+    LoadEngineShaderModule("shaders/irradiance.frag.spv", &fragShader);
 
     VkShaderModule vertShader;
-    vkutil::load_shader_module("../../../shaders/prefilter.vert.spv", _device, &vertShader);
+    LoadEngineShaderModule("shaders/prefilter.vert.spv", &vertShader);
 
     VkPushConstantRange pushRange{};
     pushRange.offset = 0;
@@ -398,12 +405,12 @@ void Core::InitIrradiancePipeline()
 void Core::InitBRDFLUTPipeline()
 {
         VkShaderModule fragShader;
-    if (!vkutil::load_shader_module("../../../shaders/brdf_lut.frag.spv", _device, &fragShader)) {
+    if (!LoadEngineShaderModule("shaders/brdf_lut.frag.spv", &fragShader)) {
         ENGINE_LOG_ERROR("Error when building BRDF LUT fragment shader module");
     }
 
     VkShaderModule vertShader;
-    if (!vkutil::load_shader_module("../../../shaders/fullscreen_triangle.vert.spv", _device, &vertShader)) {
+    if (!LoadEngineShaderModule("shaders/fullscreen_triangle.vert.spv", &vertShader)) {
         ENGINE_LOG_ERROR("Error when building fullscreen triangle vertex shader module");
     }
 

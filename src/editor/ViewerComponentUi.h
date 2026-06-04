@@ -7,10 +7,12 @@
 #include <imgui_impl_vulkan.h>
 
 #include "Transform.h"
+#include "Core.h"
 #include "NameComponent.h"
 #include "SunlightComponent.h"
 #include "Camera.h"
 #include "MeshComponent.h"
+#include "GravityComponents.h"
 
 class ViewerComponentUi
 {
@@ -134,6 +136,25 @@ public:
 
         if (DrawRemovableComponentHeader<Camera>(registry, entity, "Camera", "CameraComponent"))
         {
+            const bool isEditorOwned = registry.all_of<Engine::CoreOwnedTag>(entity);
+            if (!isEditorOwned) {
+                if (registry.all_of<EditorCameraPilotTag>(entity)) {
+                    if (ImGui::Button("Stop Piloting##CameraPilot")) {
+                        registry.remove<EditorCameraPilotTag>(entity);
+                    }
+                }
+                else {
+                    if (ImGui::Button("Pilot Camera##CameraPilot")) {
+                        auto pilotView = registry.view<EditorCameraPilotTag>();
+                        for (auto pilotEntity : pilotView) {
+                            registry.remove<EditorCameraPilotTag>(pilotEntity);
+                        }
+
+                        registry.emplace<EditorCameraPilotTag>(entity);
+                    }
+                }
+            }
+
             ImGui::DragFloat("FOV", &camera->fov, 0.5f, 1.0f, 179.0f);
             ImGui::DragFloat("Near Plane", &camera->nearPlane, 0.01f, 0.001f, 1000.0f);
             ImGui::DragFloat("Far Plane", &camera->farPlane, 10.0f, 1.0f, 1000000.0f);
@@ -172,6 +193,62 @@ public:
         if (DrawRemovableComponentHeader<SingleRenderTag>(registry, entity, "Single Render", "SingleRenderTag"))
         {
             ImGui::TextUnformatted("Enabled");
+        }
+    }
+};
+
+class ActiveCameraTagUi : public ViewerComponentUi {
+public:
+    void Draw(entt::registry& registry, entt::entity entity) override {
+        if (!registry.all_of<ActiveCameraTag>(entity))
+            return;
+
+        if (DrawRemovableComponentHeader<ActiveCameraTag>(registry, entity, "Active Camera", "ActiveCameraTag"))
+        {
+            ImGui::TextUnformatted("Used for rendering in Play Mode");
+        }
+    }
+};
+
+class VelocityComponentUi : public ViewerComponentUi {
+public:
+    void Draw(entt::registry& registry, entt::entity entity) override {
+        auto* velocity = registry.try_get<VelocityComponent>(entity);
+        if (!velocity)
+            return;
+
+        if (DrawRemovableComponentHeader<VelocityComponent>(registry, entity, "Velocity", "VelocityComponent"))
+        {
+            ImGui::DragFloat3("Linear", &velocity->linear.x, 0.1f);
+            ImGui::DragFloat3("Angular", &velocity->angular.x, 0.1f);
+        }
+    }
+};
+
+class GravityBodyComponentUi : public ViewerComponentUi {
+public:
+    void Draw(entt::registry& registry, entt::entity entity) override {
+        auto* gravityBody = registry.try_get<GravityBodyComponent>(entity);
+        if (!gravityBody)
+            return;
+
+        if (DrawRemovableComponentHeader<GravityBodyComponent>(registry, entity, "Gravity Body", "GravityBodyComponent"))
+        {
+            ImGui::DragFloat("Mass", &gravityBody->mass, 0.1f, 0.0f, 1000000000.0f);
+        }
+    }
+};
+
+class GravityParticleComponentUi : public ViewerComponentUi {
+public:
+    void Draw(entt::registry& registry, entt::entity entity) override {
+        auto* gravityParticle = registry.try_get<GravityParticleComponent>(entity);
+        if (!gravityParticle)
+            return;
+
+        if (DrawRemovableComponentHeader<GravityParticleComponent>(registry, entity, "Gravity Particle", "GravityParticleComponent"))
+        {
+            ImGui::DragFloat("Gravity Scale", &gravityParticle->gravityScale, 0.01f, 0.0f, 1000.0f);
         }
     }
 };

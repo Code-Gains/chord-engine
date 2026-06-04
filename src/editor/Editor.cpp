@@ -3,6 +3,7 @@
 #include "engine/VulkanDevice.h"
 #include "engine/Renderer.h"
 #include "engine/ImGuiManager.h"
+#include "Camera.h"
 #include "RegistryViewer.h"
 #include "EntityViewer.h"
 #include "AssetViewer.h"
@@ -12,12 +13,21 @@
 int main() {
     ENGINE_LOG_INFO("Editor starting.");
     Engine::Core core;
+    core.SetEngineRoot("../../..");
     core.SetProjectRoot("../../..");
     core.Init();
 
     std::vector<std::shared_ptr<MeshAsset>> meshes;
     meshes = core.LoadGltfMeshes(&core, "assets/DamagedHelmet.gltf").value();
     auto& registry = core.GetRegistry();
+
+    auto editorCameraEntity = registry.create();
+    auto& editorCameraTransform = registry.emplace<Transform>(editorCameraEntity);
+    editorCameraTransform.position = { 0.0f, 0.0f, 10.0f };
+    registry.emplace<Camera>(editorCameraEntity);
+    registry.emplace<ActiveCameraTag>(editorCameraEntity);
+    registry.emplace<Engine::CoreOwnedTag>(editorCameraEntity);
+    registry.emplace<NameComponent>(editorCameraEntity, "Editor Camera");
 
     core._systems.push_back(std::make_unique<ImGuiManager>(registry, &core));
 

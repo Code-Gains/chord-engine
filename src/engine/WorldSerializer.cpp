@@ -2,6 +2,7 @@
 
 #include "Camera.h"
 #include "Core.h"
+#include "GravityComponents.h"
 #include "Log.h"
 #include "MeshComponent.h"
 #include "NameComponent.h"
@@ -234,6 +235,30 @@ bool WorldSerializer::LoadWorld(Core& core, const std::filesystem::path& path) c
     return true;
 }
 
+nlohmann::json WorldSerializer::SaveWorldToJson(Core& core) const
+{
+    return WorldToJson(CaptureWorld(core));
+}
+
+bool WorldSerializer::LoadWorldFromJson(Core& core, const nlohmann::json& root) const
+{
+    Serialization::SerializedWorld world;
+    try {
+        world = WorldFromJson(root);
+    } catch (const std::exception& exception) {
+        ENGINE_LOG_ERROR("Invalid world JSON: " + std::string(exception.what()));
+        return false;
+    }
+
+    if (world.version != Serialization::CurrentWorldVersion) {
+        ENGINE_LOG_ERROR("Unsupported world version: " + std::to_string(world.version));
+        return false;
+    }
+
+    ApplyWorld(core, world);
+    return true;
+}
+
 ComponentSerializerRegistry& WorldSerializer::ComponentSerializers()
 {
     return _componentSerializers;
@@ -364,6 +389,7 @@ void WorldSerializer::RegisterDefaultComponentSerializers()
     );
 
     _componentSerializers.RegisterTag<SingleRenderTag>("SingleRenderTag");
+    _componentSerializers.RegisterTag<ActiveCameraTag>("ActiveCameraTag");
 
     _componentSerializers.Register<Camera>(
         "Camera",
@@ -406,6 +432,50 @@ void WorldSerializer::RegisterDefaultComponentSerializers()
             sunlight.color = Vec3FromJson(data.at("color"));
             sunlight.ambient = data.at("ambient").get<float>();
             return sunlight;
+        }
+    );
+
+    _componentSerializers.Register<VelocityComponent>(
+        "VelocityComponent",
+        [](Core&, const VelocityComponent& velocity) {
+            return nlohmann::json {
+                {"linear", Vec3ToJson(velocity.linear)},
+                {"angular", Vec3ToJson(velocity.angular)}
+            };
+        },
+        [](Core&, const nlohmann::json& data) {
+            VelocityComponent velocity;
+            velocity.linear = Vec3FromJson(data.at("linear"));
+            velocity.angular = Vec3FromJson(data.at("angular"));
+            return velocity;
+        }
+    );
+
+    _componentSerializers.Register<GravityBodyComponent>(
+        "GravityBodyComponent",
+        [](Core&, const GravityBodyComponent& gravityBody) {
+            return nlohmann::json {
+                {"mass", gravityBody.mass}
+            };
+        },
+        [](Core&, const nlohmann::json& data) {
+            GravityBodyComponent gravityBody;
+            gravityBody.mass = data.at("mass").get<float>();
+            return gravityBody;
+        }
+    );
+
+    _componentSerializers.Register<GravityParticleComponent>(
+        "GravityParticleComponent",
+        [](Core&, const GravityParticleComponent& gravityParticle) {
+            return nlohmann::json {
+                {"gravityScale", gravityParticle.gravityScale}
+            };
+        },
+        [](Core&, const nlohmann::json& data) {
+            GravityParticleComponent gravityParticle;
+            gravityParticle.gravityScale = data.at("gravityScale").get<float>();
+            return gravityParticle;
         }
     );
 }

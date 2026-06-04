@@ -2,6 +2,7 @@
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
 #include <VkBootstrap.h>
+#include <functional>
 #include <vector>
 
 namespace Engine {
@@ -16,6 +17,7 @@ namespace Engine {
         int _windowedHeight;
         bool _resized = false;
         bool _isFullscreen = false;
+        std::function<void(double, double)> _scrollCallback;
         void InitGLFW();
 
     public:
@@ -44,5 +46,7 @@ namespace Engine {
         bool WasResized();
         void ResetResizedFlag();
         void ToggleMaximize();
+        void SetScrollCallback(std::function<void(double, double)> callback);
+        void HandleScroll(double xOffset, double yOffset);
     };
 } // namespace engine

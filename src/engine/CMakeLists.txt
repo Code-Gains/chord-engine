@@ -14,6 +14,8 @@ add_library(engine STATIC
     InputSystem.cpp
     System.cpp
     CameraSystem.cpp
+    GravitySimulationSystem.cpp
+    VelocityIntegrationSystem.cpp
     PhysicsBody.cpp
     NameComponent.cpp
     SunlightComponent.cpp

@@ -242,7 +242,7 @@ void AssetViewer::LoadSelectedWorld()
         return;
     }
 
-    Engine::WorldSerializer serializer;
+    auto serializer = _core->CreateWorldSerializer();
     const auto worldPath = _core->ResolveProjectPath(_selectedAssetFile);
 
     if (serializer.LoadWorld(*_core, worldPath)) {

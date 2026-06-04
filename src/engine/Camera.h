@@ -1,6 +1,9 @@
 #pragma once
 #include "Transform.h"
 
+struct ActiveCameraTag {};
+struct EditorCameraPilotTag {};
+
 struct Camera {
     float fov = 90.0f;
     float aspectRatio = 16.0f / 9.0f; // TODO 
@@ -37,5 +40,9 @@ struct Camera {
 
     // controls
     float speed = 20.0f;
+    float orbitSensitivity = 0.35f;
+    float panSensitivity = 0.002f;
+    float zoomSensitivity = 0.12f;
+    float focusDistanceScale = 4.0f;
     bool screenshotRequested = false;
 };

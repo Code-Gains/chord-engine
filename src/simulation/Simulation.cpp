@@ -1076,6 +1076,7 @@ void Simulation::InitializeSphereSimulation()
 
 int main () {
     Engine::Core core;
+    core.SetEngineRoot("../../..");
     core.SetProjectRoot("../../..");
     core.Init();
 
