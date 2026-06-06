@@ -3,6 +3,7 @@
 #include <array>
 #include <entt/entt.hpp>
 #include <filesystem>
+#include <string>
 
 namespace Engine {
 class Core;
@@ -28,7 +29,10 @@ private:
 
     void EnsureDefaultWorldPath();
     void SetWorldPathBuffer(const std::filesystem::path& path);
+    void DrawSceneMenuStatus();
     void DrawWorldFileDialog();
+    void RequestWorldFileDialog(WorldFileDialogMode mode);
+    void SaveCurrentWorldOrOpenDialog();
     bool SaveWorldToPath(const std::filesystem::path& worldPath);
 
     Engine::Core* _core = nullptr;
@@ -36,4 +40,7 @@ private:
     WorldFileDialogMode _worldFileDialogMode = WorldFileDialogMode::None;
     bool _openWorldFileDialogRequested = false;
     bool _overwriteConfirmationActive = false;
+    std::string _saveStatusText;
+    float _saveStatusTimer = 0.0f;
+    bool _lastSaveSucceeded = false;
 };

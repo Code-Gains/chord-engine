@@ -11,6 +11,7 @@ add_library(engine STATIC
     EcsDebugger.cpp
     Camera.cpp
     Transform.cpp
+    EditorImGuiTheme.cpp
     InputSystem.cpp
     System.cpp
     CameraSystem.cpp

@@ -887,6 +887,7 @@ void Core::DrawGeometry(VkCommandBuffer cmd)
             // Push constants per mesh
             BatchDrawPushConstants pc{};
             pc.viewProjection = projectionMatrix * viewMatrix;
+            pc.baseColorFactor = material ? material->baseColorFactor : glm::vec4{ 1.0f };
             pc.vertexBuffer = mesh->meshBuffers.vertexBufferAddress;
             pc.instanceBuffer = instanceAddress;
 
@@ -1006,6 +1007,7 @@ void Core::DrawGeometry(VkCommandBuffer cmd)
         push_constants.vertexBuffer = meshAssetPtr->meshBuffers.vertexBufferAddress;
         push_constants.model = model;
         push_constants.viewProjection = projectionMatrix * viewMatrix;
+        push_constants.baseColorFactor = material ? material->baseColorFactor : glm::vec4{ 1.0f };
 
         vkCmdPushConstants(cmd, _meshPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(GPUDrawPushConstants), &push_constants);
 

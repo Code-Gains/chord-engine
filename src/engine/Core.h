@@ -82,9 +82,9 @@ struct MaterialPipeline {
 
 struct BatchDrawPushConstants {
     glm::mat4 viewProjection;
+    glm::vec4 baseColorFactor;
     VkDeviceAddress vertexBuffer;
     VkDeviceAddress instanceBuffer;
-    uint32_t _pad[2];
 };
 
 struct PrefilterPushConstants {

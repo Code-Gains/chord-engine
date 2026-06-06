@@ -291,6 +291,12 @@ size_t Core::LoadGltfMaterials(fastgltf::Asset &gltf, size_t imageOffset)
         material.metallicRoughnessImage = &_defaultMetallicRoughnessImage;
         material.occlusionImage = &_whiteImage;
         material.emissionImage = &_blackImage;
+        material.baseColorFactor = glm::vec4{
+            gltfMaterial.pbrData.baseColorFactor[0],
+            gltfMaterial.pbrData.baseColorFactor[1],
+            gltfMaterial.pbrData.baseColorFactor[2],
+            gltfMaterial.pbrData.baseColorFactor[3]
+        };
 
         AssignGltfMaterialTexture(
             gltf,

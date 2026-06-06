@@ -5,6 +5,7 @@ layout(location = 0) out vec3 outPos;
 layout(location = 1) out vec3 outNormal;
 layout(location = 2) out vec2 outUV;
 layout(location = 3) out vec4 outTangent;
+layout(location = 4) out vec4 outBaseColorFactor;
 
 struct Vertex {
     vec3 position;
@@ -22,6 +23,7 @@ layout(push_constant) uniform constants
 {
     mat4 viewProjection;
     mat4 model;
+    vec4 baseColorFactor;
     VertexBuffer vertexBuffer;
 } PushConstants;
 
@@ -39,4 +41,5 @@ void main()
 
     outUV = vec2(vertex.uv_x, vertex.uv_y);
     outTangent = vec4(normalize(mat3(PushConstants.model) * vertex.tangent.xyz), vertex.tangent.w);
+    outBaseColorFactor = PushConstants.baseColorFactor;
 }

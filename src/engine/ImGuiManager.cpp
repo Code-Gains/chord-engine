@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cstring>
 #include <filesystem>
+#include <string>
 #include <string_view>
 
 ImGuiManager::ImGuiManager(entt::registry& registry)
@@ -26,28 +27,37 @@ void ImGuiManager::DrawUi()
     auto& windowRegistry = _registry.ctx().get<ImGuiWindowRegistry>();
     EnsureDefaultWorldPath();
 
+    if (_saveStatusTimer > 0.0f) {
+        _saveStatusTimer = std::max(0.0f, _saveStatusTimer - ImGui::GetIO().DeltaTime);
+    }
+
+    if (_core != nullptr &&
+        ImGui::GetIO().KeyCtrl &&
+        ImGui::IsKeyPressed(ImGuiKey_S, false))
+    {
+        SaveCurrentWorldOrOpenDialog();
+    }
+
+    if (_core != nullptr &&
+        ImGui::GetIO().KeyCtrl &&
+        ImGui::IsKeyPressed(ImGuiKey_O, false))
+    {
+        RequestWorldFileDialog(WorldFileDialogMode::Open);
+    }
+
     if (ImGui::BeginMainMenuBar())
     {
         if (ImGui::BeginMenu("File"))
         {
             ImGui::MenuItem("New", "Ctrl+N");
-            if (ImGui::MenuItem("Open World...", "Ctrl+O", false, _core != nullptr)) {
-                _worldFileDialogMode = WorldFileDialogMode::Open;
-                _openWorldFileDialogRequested = true;
+            if (ImGui::MenuItem("Open Scene...", "Ctrl+O", false, _core != nullptr)) {
+                RequestWorldFileDialog(WorldFileDialogMode::Open);
             }
-            if (ImGui::MenuItem("Save World", "Ctrl+S", false, _core != nullptr)) {
-                if (_core->GetCurrentWorldPath().has_value()) {
-                    SaveWorldToPath(_core->ResolveProjectPath(_core->GetCurrentWorldPath().value()));
-                } else {
-                    _worldFileDialogMode = WorldFileDialogMode::Save;
-                    _overwriteConfirmationActive = false;
-                    _openWorldFileDialogRequested = true;
-                }
+            if (ImGui::MenuItem("Save Scene", "Ctrl+S", false, _core != nullptr)) {
+                SaveCurrentWorldOrOpenDialog();
             }
-            if (ImGui::MenuItem("Save World As...", nullptr, false, _core != nullptr)) {
-                _worldFileDialogMode = WorldFileDialogMode::Save;
-                _overwriteConfirmationActive = false;
-                _openWorldFileDialogRequested = true;
+            if (ImGui::MenuItem("Save Scene As...", nullptr, false, _core != nullptr)) {
+                RequestWorldFileDialog(WorldFileDialogMode::Save);
             }
             ImGui::EndMenu();
         }
@@ -91,6 +101,7 @@ void ImGuiManager::DrawUi()
             ImGui::EndMenu();
         }
 
+        DrawSceneMenuStatus();
         ImGui::EndMainMenuBar();
     }
 
@@ -100,6 +111,47 @@ void ImGuiManager::DrawUi()
     }
 
     DrawWorldFileDialog();
+}
+
+void ImGuiManager::DrawSceneMenuStatus()
+{
+    ImGui::Separator();
+
+    std::string sceneLabel = "Untitled";
+    if (_core != nullptr && _core->GetCurrentWorldPath().has_value()) {
+        sceneLabel = _core->GetCurrentWorldPath().value().generic_string();
+    }
+
+    ImGui::TextDisabled("Scene: %s", sceneLabel.c_str());
+
+    if (_saveStatusTimer > 0.0f && !_saveStatusText.empty()) {
+        ImGui::SameLine();
+        const ImVec4 color = _lastSaveSucceeded
+            ? ImVec4{ 0.35f, 0.85f, 0.45f, 1.0f }
+            : ImVec4{ 1.0f, 0.35f, 0.25f, 1.0f };
+        ImGui::TextColored(color, "%s", _saveStatusText.c_str());
+    }
+}
+
+void ImGuiManager::RequestWorldFileDialog(WorldFileDialogMode mode)
+{
+    _worldFileDialogMode = mode;
+    _overwriteConfirmationActive = false;
+    _openWorldFileDialogRequested = true;
+}
+
+void ImGuiManager::SaveCurrentWorldOrOpenDialog()
+{
+    if (_core == nullptr) {
+        return;
+    }
+
+    if (_core->GetCurrentWorldPath().has_value()) {
+        SaveWorldToPath(_core->ResolveProjectPath(_core->GetCurrentWorldPath().value()));
+        return;
+    }
+
+    RequestWorldFileDialog(WorldFileDialogMode::Save);
 }
 
 void ImGuiManager::EnsureDefaultWorldPath()
@@ -145,7 +197,7 @@ void ImGuiManager::DrawWorldFileDialog()
     if (ImGui::BeginPopupModal("World File", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
         const bool isOpenMode = _worldFileDialogMode == WorldFileDialogMode::Open;
 
-        ImGui::TextUnformatted(isOpenMode ? "Open world file" : "Save world file");
+        ImGui::TextUnformatted(isOpenMode ? "Open scene file" : "Save scene file");
         ImGui::SetNextItemWidth(460.0f);
         ImGui::InputText(
             "Path",
@@ -223,5 +275,11 @@ bool ImGuiManager::SaveWorldToPath(const std::filesystem::path& worldPath)
 
     std::filesystem::create_directories(worldPath.parent_path());
     auto serializer = _core->CreateWorldSerializer();
-    return serializer.SaveWorld(*_core, worldPath);
+    const bool saved = serializer.SaveWorld(*_core, worldPath);
+
+    _lastSaveSucceeded = saved;
+    _saveStatusText = saved ? "Saved" : "Save failed";
+    _saveStatusTimer = 2.0f;
+
+    return saved;
 }

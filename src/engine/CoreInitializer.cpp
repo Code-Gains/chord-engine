@@ -3,6 +3,7 @@
 #include "Transform.h"
 #include "Camera.h"
 #include "CameraSystem.h"
+#include "EditorImGuiTheme.h"
 #include "NameComponent.h"
 #include "vk_initializers.h"
 
@@ -169,6 +170,7 @@ void Core::InitImgui()
     ImGui::CreateContext();
     ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_DockingEnable;
     ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
+    ApplyEditorImGuiTheme();
     // this initializes imgui for SDL
     ImGui_ImplGlfw_InitForVulkan(_window->GetNativeHandle(), true);
 

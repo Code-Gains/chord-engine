@@ -76,6 +76,7 @@ struct MaterialInstance {
     MaterialPipeline* pipeline;
     VkDescriptorSet materialSet;
     MaterialPass passType;
+    glm::vec4 baseColorFactor{ 1.0f };
     AllocatedImage* image = nullptr;
     AllocatedImage* metallicRoughnessImage = nullptr;
     AllocatedImage* normalImage = nullptr;
@@ -105,6 +106,7 @@ struct GPUMeshBuffers {
 struct GPUDrawPushConstants {
     glm::mat4 viewProjection;
     glm::mat4 model;
+    glm::vec4 baseColorFactor;
     VkDeviceAddress vertexBuffer;
 };
 
