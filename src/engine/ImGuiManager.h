@@ -34,6 +34,7 @@ private:
     void RequestWorldFileDialog(WorldFileDialogMode mode);
     void SaveCurrentWorldOrOpenDialog();
     bool SaveWorldToPath(const std::filesystem::path& worldPath);
+    void ResetEditorWindowPositions();
 
     Engine::Core* _core = nullptr;
     std::array<char, 512> _worldPathBuffer {};

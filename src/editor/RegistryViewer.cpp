@@ -24,6 +24,23 @@ namespace {
         selectedEntity = entt::null;
         GetEditorSelection(registry).selectedEntity = entt::null;
     }
+
+    bool CanDeleteSelectedEntity(entt::registry& registry, entt::entity selectedEntity)
+    {
+        return selectedEntity != entt::null &&
+            registry.valid(selectedEntity) &&
+            !registry.all_of<Engine::CoreOwnedTag>(selectedEntity);
+    }
+
+    void DeleteSelectedEntity(entt::registry& registry, entt::entity& selectedEntity)
+    {
+        if (!CanDeleteSelectedEntity(registry, selectedEntity)) {
+            return;
+        }
+
+        registry.destroy(selectedEntity);
+        ClearSelectedEntity(registry, selectedEntity);
+    }
 }
 
 void RegistryViewer::Update(float deltaTime)
@@ -45,6 +62,13 @@ void RegistryViewer::DrawUi()
 {
     auto& windowRegistry = _registry.ctx().get<ImGuiWindowRegistry>();
     auto& editorSelection = GetEditorSelection(_registry);
+
+    if (ImGui::IsKeyPressed(ImGuiKey_Delete, false) &&
+        !ImGui::GetIO().WantTextInput &&
+        !ImGui::IsAnyItemActive())
+    {
+        DeleteSelectedEntity(_registry, _selectedEntity);
+    }
 
     if (!windowRegistry.IsWindowOpen("Registry Viewer"))
         return;
@@ -68,10 +92,7 @@ void RegistryViewer::DrawUi()
 
         ImGui::SameLine();
 
-        const bool canDeleteSelectedEntity =
-            _selectedEntity != entt::null &&
-            _registry.valid(_selectedEntity) &&
-            !_registry.all_of<Engine::CoreOwnedTag>(_selectedEntity);
+        const bool canDeleteSelectedEntity = CanDeleteSelectedEntity(_registry, _selectedEntity);
 
         if (!canDeleteSelectedEntity) {
             ImGui::BeginDisabled();
@@ -79,8 +100,7 @@ void RegistryViewer::DrawUi()
 
         if (ImGui::Button("- Entity"))
         {
-            _registry.destroy(_selectedEntity);
-            ClearSelectedEntity(_registry, _selectedEntity);
+            DeleteSelectedEntity(_registry, _selectedEntity);
         }
 
         if (!canDeleteSelectedEntity) {
@@ -165,4 +185,15 @@ RegistryViewer::RegistryViewer(entt::registry &registry) : System(registry) {
 const entt::entity& RegistryViewer::GetSelectedEntity() const
 {
     return _selectedEntity;
+}
+
+void RegistryViewer::SetSelectedEntity(entt::entity entity)
+{
+    if (entity != entt::null && !_registry.valid(entity)) {
+        ClearSelectedEntity(_registry, _selectedEntity);
+        return;
+    }
+
+    _selectedEntity = entity;
+    GetEditorSelection(_registry).selectedEntity = entity;
 }

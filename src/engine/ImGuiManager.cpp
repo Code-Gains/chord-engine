@@ -98,6 +98,10 @@ void ImGuiManager::DrawUi()
         if (ImGui::BeginMenu("Window"))
         {
             windowRegistry.DrawMenuItems();
+            ImGui::Separator();
+            if (ImGui::MenuItem("Reset Window Positions")) {
+                ResetEditorWindowPositions();
+            }
             ImGui::EndMenu();
         }
 
@@ -282,4 +286,30 @@ bool ImGuiManager::SaveWorldToPath(const std::filesystem::path& worldPath)
     _saveStatusTimer = 2.0f;
 
     return saved;
+}
+
+void ImGuiManager::ResetEditorWindowPositions()
+{
+    auto& windowRegistry = _registry.ctx().get<ImGuiWindowRegistry>();
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    const ImVec2 basePosition = viewport
+        ? ImVec2{ viewport->WorkPos.x + 24.0f, viewport->WorkPos.y + 48.0f }
+        : ImVec2{ 24.0f, 48.0f };
+
+    int index = 0;
+    for (const auto& windowName : windowRegistry.WindowNames()) {
+        const ImVec2 position {
+            basePosition.x + static_cast<float>(index % 4) * 34.0f,
+            basePosition.y + static_cast<float>(index % 4) * 34.0f
+        };
+
+        ImGui::SetWindowPos(windowName.c_str(), position, ImGuiCond_Always);
+        ImGui::SetWindowCollapsed(windowName.c_str(), false, ImGuiCond_Always);
+        windowRegistry.SetWindowOpen(windowName, true);
+        ++index;
+    }
+
+    _lastSaveSucceeded = true;
+    _saveStatusText = "Window positions reset";
+    _saveStatusTimer = 2.0f;
 }

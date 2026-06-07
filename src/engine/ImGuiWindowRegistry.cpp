@@ -66,3 +66,15 @@ void ImGuiWindowRegistry::ToggleWindow(const std::string& menuName)
         }
     }
 }
+
+std::vector<std::string> ImGuiWindowRegistry::WindowNames() const
+{
+    std::vector<std::string> names;
+    names.reserve(_windows.size());
+
+    for (const auto& window : _windows) {
+        names.push_back(window.menuName);
+    }
+
+    return names;
+}

@@ -4,6 +4,7 @@
 #include <engine/System.h>
 #include "RegistryViewer.h"
 
+#include <array>
 #include <filesystem>
 #include <memory>
 #include <string>
@@ -22,7 +23,8 @@ public:
 private:
     enum class AssetKind {
         Mesh,
-        World
+        World,
+        Prefab
     };
 
     struct AssetFileEntry {
@@ -38,9 +40,17 @@ private:
     AssetKind _selectedAssetKind = AssetKind::Mesh;
     std::string _selectedAssetFile;
     std::string _statusText;
+    float _statusTimer = 0.0f;
+    bool _statusSucceeded = true;
+    std::array<char, 512> _prefabPathBuffer {};
+    bool _overwritePrefabConfirmationActive = false;
 
-    void RefreshAssetList();
+    void RefreshAssetList(bool updateStatus = true);
     std::vector<std::shared_ptr<MeshAsset>>* GetOrLoadMeshes(const std::filesystem::path& projectPath);
     void AssignMeshToSelectedEntity(const std::shared_ptr<MeshAsset>& mesh);
     void LoadSelectedWorld();
+    void InstantiateSelectedPrefab();
+    void SaveSelectedEntityAsPrefab(bool overwriteConfirmed = false);
+    void SetPrefabPathBuffer(const std::filesystem::path& projectPath);
+    void SetStatus(std::string text, bool succeeded);
 };

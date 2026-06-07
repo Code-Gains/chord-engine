@@ -16,4 +16,5 @@ class RegistryViewer : public System {
 public:
     RegistryViewer(entt::registry& registry);
     const entt::entity& GetSelectedEntity() const;
+    void SetSelectedEntity(entt::entity entity);
 };

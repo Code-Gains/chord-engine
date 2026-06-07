@@ -9,9 +9,15 @@
 #include "WorldSerializer.h"
 
 #include <algorithm>
+#include <filesystem>
+#include <string_view>
+#include <utility>
 
 void AssetViewer::Update(float deltaTime)
 {
+    if (_statusTimer > 0.0f) {
+        _statusTimer = std::max(0.0f, _statusTimer - deltaTime);
+    }
 }
 
 void AssetViewer::DrawUi()
@@ -27,6 +33,41 @@ void AssetViewer::DrawUi()
     {
         if (ImGui::Button("Refresh")) {
             RefreshAssetList();
+        }
+
+        ImGui::Separator();
+        ImGui::TextUnformatted("Prefab");
+        ImGui::SetNextItemWidth(320.0f);
+        ImGui::InputText(
+            "Path##SavePrefabPath",
+            _prefabPathBuffer.data(),
+            _prefabPathBuffer.size()
+        );
+        if (ImGui::IsItemEdited()) {
+            _overwritePrefabConfirmationActive = false;
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Save Selected")) {
+            SaveSelectedEntityAsPrefab();
+        }
+
+        if (_overwritePrefabConfirmationActive) {
+            ImGui::SameLine();
+            if (ImGui::Button("Overwrite Prefab")) {
+                SaveSelectedEntityAsPrefab(true);
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Cancel##CancelPrefabOverwrite")) {
+                _overwritePrefabConfirmationActive = false;
+                SetStatus("Prefab overwrite cancelled.", true);
+            }
+        }
+
+        if ((_statusTimer > 0.0f || !_statusSucceeded) && !_statusText.empty()) {
+            const ImVec4 color = _statusSucceeded
+                ? ImVec4{ 0.35f, 0.85f, 0.45f, 1.0f }
+                : ImVec4{ 1.0f, 0.35f, 0.25f, 1.0f };
+            ImGui::TextColored(color, "%s", _statusText.c_str());
         }
 
         ImGui::Separator();
@@ -103,11 +144,24 @@ void AssetViewer::DrawUi()
                 LoadSelectedWorld();
             }
         }
-
-        if (!_statusText.empty())
+        else if (_selectedAssetKind == AssetKind::Prefab)
         {
+            ImGui::Text("Prefab: %s", _selectedAssetFile.c_str());
             ImGui::Separator();
-            ImGui::TextWrapped("%s", _statusText.c_str());
+
+            if (ImGui::Button("Instantiate")) {
+                InstantiateSelectedPrefab();
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Use For Save Path")) {
+                SetPrefabPathBuffer(_selectedAssetFile);
+                _overwritePrefabConfirmationActive = false;
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Copy Path")) {
+                ImGui::SetClipboardText(_selectedAssetFile.c_str());
+                SetStatus("Copied prefab path " + _selectedAssetFile, true);
+            }
         }
 
         ImGui::EndChild();
@@ -131,21 +185,27 @@ AssetViewer::AssetViewer(entt::registry& registry, Engine::Core* core, RegistryV
     );
 
     RefreshAssetList();
+    constexpr std::string_view defaultPrefabPath = "assets/prefabs/new_prefab.json";
+    SetPrefabPathBuffer(defaultPrefabPath.data());
 }
 
-void AssetViewer::RefreshAssetList()
+void AssetViewer::RefreshAssetList(bool updateStatus)
 {
     _assetFiles.clear();
 
     if (!_core) {
-        _statusText = "Asset viewer has no core.";
+        if (updateStatus) {
+            SetStatus("Asset viewer has no core.", false);
+        }
         return;
     }
 
     const auto assetsPath = _core->ResolveProjectPath("assets");
 
     if (!std::filesystem::exists(assetsPath)) {
-        _statusText = "Assets folder not found.";
+        if (updateStatus) {
+            SetStatus("Assets folder not found.", false);
+        }
         return;
     }
 
@@ -169,6 +229,10 @@ void AssetViewer::RefreshAssetList()
             kind = AssetKind::World;
             displayPrefix = "[World] ";
         }
+        else if (extension == ".json" && projectPathString.starts_with("assets/prefabs/")) {
+            kind = AssetKind::Prefab;
+            displayPrefix = "[Prefab] ";
+        }
         else {
             continue;
         }
@@ -188,7 +252,9 @@ void AssetViewer::RefreshAssetList()
         }
     );
 
-    _statusText = "Found " + std::to_string(_assetFiles.size()) + " assets.";
+    if (updateStatus) {
+        SetStatus("Found " + std::to_string(_assetFiles.size()) + " assets.", true);
+    }
 }
 
 std::vector<std::shared_ptr<MeshAsset>>* AssetViewer::GetOrLoadMeshes(const std::filesystem::path& projectPath)
@@ -205,12 +271,12 @@ std::vector<std::shared_ptr<MeshAsset>>* AssetViewer::GetOrLoadMeshes(const std:
 
     auto meshes = _core->LoadGltfMeshes(_core, projectPath);
     if (!meshes.has_value()) {
-        _statusText = "Failed to load " + key;
+        SetStatus("Failed to load " + key, false);
         return nullptr;
     }
 
     auto [inserted, wasInserted] = _loadedMeshes.emplace(key, std::move(meshes.value()));
-    _statusText = "Loaded " + std::to_string(inserted->second.size()) + " meshes from " + key;
+    SetStatus("Loaded " + std::to_string(inserted->second.size()) + " meshes from " + key, true);
     return &inserted->second;
 }
 
@@ -223,7 +289,7 @@ void AssetViewer::AssignMeshToSelectedEntity(const std::shared_ptr<MeshAsset>& m
     auto selectedEntity = _registryViewerPtr->GetSelectedEntity();
 
     if (selectedEntity == entt::null || !_registry.valid(selectedEntity)) {
-        _statusText = "No entity selected.";
+        SetStatus("No entity selected.", false);
         return;
     }
 
@@ -231,9 +297,9 @@ void AssetViewer::AssignMeshToSelectedEntity(const std::shared_ptr<MeshAsset>& m
     meshComponent.mesh = mesh;
     meshComponent.source = mesh->source;
 
-    _statusText = "Assigned mesh " +
+    SetStatus("Assigned mesh " +
         (mesh->name.empty() ? std::to_string(mesh->source.meshIndex) : mesh->name) +
-        " to selected entity.";
+        " to selected entity.", true);
 }
 
 void AssetViewer::LoadSelectedWorld()
@@ -247,9 +313,90 @@ void AssetViewer::LoadSelectedWorld()
 
     if (serializer.LoadWorld(*_core, worldPath)) {
         _core->SetCurrentWorldPath(_selectedAssetFile);
-        _statusText = "Loaded world " + _selectedAssetFile;
+        SetStatus("Loaded world " + _selectedAssetFile, true);
     }
     else {
-        _statusText = "Failed to load world " + _selectedAssetFile;
+        SetStatus("Failed to load world " + _selectedAssetFile, false);
     }
+}
+
+void AssetViewer::InstantiateSelectedPrefab()
+{
+    if (!_core || _selectedAssetFile.empty()) {
+        return;
+    }
+
+    auto serializer = _core->CreateWorldSerializer();
+    const auto prefabPath = _core->ResolveProjectPath(_selectedAssetFile);
+    auto entity = serializer.InstantiatePrefab(*_core, prefabPath);
+
+    if (entity.has_value()) {
+        if (_registryViewerPtr) {
+            _registryViewerPtr->SetSelectedEntity(entity.value());
+        }
+
+        SetStatus("Instantiated prefab " + _selectedAssetFile, true);
+    }
+    else {
+        SetStatus("Failed to instantiate prefab " + _selectedAssetFile, false);
+    }
+}
+
+void AssetViewer::SaveSelectedEntityAsPrefab(bool overwriteConfirmed)
+{
+    if (!_core || !_registryViewerPtr) {
+        return;
+    }
+
+    const auto selectedEntity = _registryViewerPtr->GetSelectedEntity();
+    if (selectedEntity == entt::null || !_registry.valid(selectedEntity)) {
+        SetStatus("No entity selected.", false);
+        return;
+    }
+
+    const std::filesystem::path projectPath = _prefabPathBuffer.data();
+    if (projectPath.empty()) {
+        SetStatus("Prefab path is empty.", false);
+        return;
+    }
+
+    const auto prefabPath = _core->ResolveProjectPath(projectPath);
+
+    if (std::filesystem::exists(prefabPath) && !overwriteConfirmed) {
+        _overwritePrefabConfirmationActive = true;
+        SetStatus(
+            "Prefab already exists. Click Overwrite Prefab to replace " + projectPath.generic_string(),
+            false);
+        return;
+    }
+
+    std::filesystem::create_directories(prefabPath.parent_path());
+
+    auto serializer = _core->CreateWorldSerializer();
+    if (serializer.SavePrefab(*_core, selectedEntity, prefabPath)) {
+        _overwritePrefabConfirmationActive = false;
+        SetStatus("Saved prefab " + projectPath.generic_string(), true);
+        RefreshAssetList(false);
+    }
+    else {
+        SetStatus("Failed to save prefab " + projectPath.generic_string(), false);
+    }
+}
+
+void AssetViewer::SetPrefabPathBuffer(const std::filesystem::path& projectPath)
+{
+    const auto pathString = projectPath.generic_string();
+    std::fill(_prefabPathBuffer.begin(), _prefabPathBuffer.end(), '\0');
+    std::copy_n(
+        pathString.data(),
+        std::min(pathString.size(), _prefabPathBuffer.size() - 1),
+        _prefabPathBuffer.data()
+    );
+}
+
+void AssetViewer::SetStatus(std::string text, bool succeeded)
+{
+    _statusText = std::move(text);
+    _statusSucceeded = succeeded;
+    _statusTimer = succeeded ? 2.0f : -1.0f;
 }

@@ -181,6 +181,8 @@ public:
 
     bool SaveWorld(Core& core, const std::filesystem::path& path) const;
     bool LoadWorld(Core& core, const std::filesystem::path& path) const;
+    bool SavePrefab(Core& core, entt::entity entity, const std::filesystem::path& path) const;
+    std::optional<entt::entity> InstantiatePrefab(Core& core, const std::filesystem::path& path) const;
     nlohmann::json SaveWorldToJson(Core& core) const;
     bool LoadWorldFromJson(Core& core, const nlohmann::json& root) const;
 
@@ -190,6 +192,8 @@ public:
 private:
     Serialization::SerializedWorld CaptureWorld(Core& core) const;
     void ApplyWorld(Core& core, const Serialization::SerializedWorld& world) const;
+    std::optional<Serialization::SerializedEntity> CaptureEntity(Core& core, entt::entity entity) const;
+    entt::entity ApplyEntity(Core& core, const Serialization::SerializedEntity& entity) const;
     void RegisterDefaultComponentSerializers();
 
     ComponentSerializerRegistry _componentSerializers;

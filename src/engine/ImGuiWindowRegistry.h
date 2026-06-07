@@ -21,6 +21,7 @@ public:
     bool IsWindowOpen(const std::string& menuName) const;
     void SetWindowOpen(const std::string& menuName, bool open);
     void ToggleWindow(const std::string& menuName);
+    std::vector<std::string> WindowNames() const;
 
 private:
     std::vector<ImGuiWindowEntry> _windows;

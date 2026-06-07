@@ -99,6 +99,26 @@ nlohmann::json WorldToJson(const Serialization::SerializedWorld& world)
     };
 }
 
+nlohmann::json PrefabToJson(const Serialization::SerializedEntity& entity)
+{
+    nlohmann::json components = nlohmann::json::array();
+
+    for (const auto& component : entity.components) {
+        components.push_back({
+            {"type", component.type},
+            {"data", component.data}
+        });
+    }
+
+    return {
+        {"version", Serialization::CurrentWorldVersion},
+        {"entity", {
+            {"id", entity.id},
+            {"components", components}
+        }}
+    };
+}
+
 Serialization::SerializedWorld WorldFromJson(const nlohmann::json& root)
 {
     Serialization::SerializedWorld world;
@@ -119,6 +139,40 @@ Serialization::SerializedWorld WorldFromJson(const nlohmann::json& root)
     }
 
     return world;
+}
+
+Serialization::SerializedEntity EntityFromJson(const nlohmann::json& entityJson)
+{
+    Serialization::SerializedEntity entity;
+    entity.id = entityJson.value("id", uint64_t{ 0 });
+
+    for (const auto& componentJson : entityJson.at("components")) {
+        entity.components.push_back({
+            componentJson.at("type").get<std::string>(),
+            componentJson.at("data")
+        });
+    }
+
+    return entity;
+}
+
+Serialization::SerializedEntity PrefabFromJson(const nlohmann::json& root)
+{
+    const uint32_t version = root.at("version").get<uint32_t>();
+    if (version != Serialization::CurrentWorldVersion) {
+        throw std::runtime_error("Unsupported prefab version: " + std::to_string(version));
+    }
+
+    if (root.contains("entity")) {
+        return EntityFromJson(root.at("entity"));
+    }
+
+    auto world = WorldFromJson(root);
+    if (world.entities.size() != 1) {
+        throw std::runtime_error("Prefab world must contain exactly one entity.");
+    }
+
+    return std::move(world.entities.front());
 }
 
 } // namespace
@@ -235,6 +289,53 @@ bool WorldSerializer::LoadWorld(Core& core, const std::filesystem::path& path) c
     return true;
 }
 
+bool WorldSerializer::SavePrefab(Core& core, entt::entity entity, const std::filesystem::path& path) const
+{
+    auto serializedEntity = CaptureEntity(core, entity);
+    if (!serializedEntity.has_value()) {
+        ENGINE_LOG_ERROR("Failed to capture prefab entity.");
+        return false;
+    }
+
+    std::ofstream output(path);
+    if (!output.is_open()) {
+        ENGINE_LOG_ERROR("Failed to open prefab file for saving: " + path.string());
+        return false;
+    }
+
+    output << PrefabToJson(serializedEntity.value()).dump(4);
+    return true;
+}
+
+std::optional<entt::entity> WorldSerializer::InstantiatePrefab(
+    Core& core,
+    const std::filesystem::path& path) const
+{
+    std::ifstream input(path);
+    if (!input.is_open()) {
+        ENGINE_LOG_ERROR("Failed to open prefab file for loading: " + path.string());
+        return std::nullopt;
+    }
+
+    nlohmann::json root;
+    try {
+        input >> root;
+    } catch (const std::exception& exception) {
+        ENGINE_LOG_ERROR("Failed to parse prefab file: " + std::string(exception.what()));
+        return std::nullopt;
+    }
+
+    Serialization::SerializedEntity entity;
+    try {
+        entity = PrefabFromJson(root);
+    } catch (const std::exception& exception) {
+        ENGINE_LOG_ERROR("Invalid prefab file: " + std::string(exception.what()));
+        return std::nullopt;
+    }
+
+    return ApplyEntity(core, entity);
+}
+
 nlohmann::json WorldSerializer::SaveWorldToJson(Core& core) const
 {
     return WorldToJson(CaptureWorld(core));
@@ -279,17 +380,10 @@ Serialization::SerializedWorld WorldSerializer::CaptureWorld(Core& core) const
             continue;
         }
 
-        auto components =
-            _componentSerializers.SaveComponents(core, registry, entity);
-
-        if (components.empty()) {
-            continue;
+        auto serializedEntity = CaptureEntity(core, entity);
+        if (serializedEntity.has_value()) {
+            world.entities.push_back(std::move(serializedEntity.value()));
         }
-
-        world.entities.push_back(Serialization::SerializedEntity {
-            static_cast<uint64_t>(entt::to_integral(entity)),
-            std::move(components)
-        });
     }
 
     return world;
@@ -309,12 +403,42 @@ void WorldSerializer::ApplyWorld(Core& core, const Serialization::SerializedWorl
     }
 
     for (const auto& serializedEntity : world.entities) {
-        auto entity = registry.create();
-
-        for (const auto& component : serializedEntity.components) {
-            _componentSerializers.LoadComponent(core, registry, entity, component);
-        }
+        ApplyEntity(core, serializedEntity);
     }
+}
+
+std::optional<Serialization::SerializedEntity> WorldSerializer::CaptureEntity(
+    Core& core,
+    entt::entity entity) const
+{
+    auto& registry = core.GetRegistry();
+    if (!registry.valid(entity) || registry.all_of<CoreOwnedTag>(entity)) {
+        return std::nullopt;
+    }
+
+    auto components = _componentSerializers.SaveComponents(core, registry, entity);
+    if (components.empty()) {
+        return std::nullopt;
+    }
+
+    return Serialization::SerializedEntity {
+        static_cast<uint64_t>(entt::to_integral(entity)),
+        std::move(components)
+    };
+}
+
+entt::entity WorldSerializer::ApplyEntity(
+    Core& core,
+    const Serialization::SerializedEntity& serializedEntity) const
+{
+    auto& registry = core.GetRegistry();
+    auto entity = registry.create();
+
+    for (const auto& component : serializedEntity.components) {
+        _componentSerializers.LoadComponent(core, registry, entity, component);
+    }
+
+    return entity;
 }
 
 void WorldSerializer::RegisterDefaultComponentSerializers()
