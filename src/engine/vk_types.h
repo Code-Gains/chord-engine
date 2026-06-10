@@ -110,6 +110,36 @@ struct GPUDrawPushConstants {
     VkDeviceAddress vertexBuffer;
 };
 
+struct LineVertex {
+    glm::vec3 position;
+    float pad0 = 0.0f;
+    glm::vec4 color;
+};
+
+struct LineDrawPushConstants {
+    glm::mat4 viewProjection;
+    VkDeviceAddress vertexBuffer;
+};
+
+struct ShadowDrawPushConstants {
+    glm::mat4 lightViewProjection;
+    glm::mat4 model;
+    VkDeviceAddress vertexBuffer;
+};
+
+struct SelectionMaskPushConstants {
+    glm::mat4 viewProjection;
+    glm::mat4 model;
+    VkDeviceAddress vertexBuffer;
+};
+
+struct SelectionOutlinePushConstants {
+    glm::vec4 color;
+    glm::vec2 texelSize;
+    float thickness;
+    float pad0 = 0.0f;
+};
+
 //< vbuf_types
 
 //> node_types

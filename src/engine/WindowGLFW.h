@@ -16,9 +16,12 @@ namespace Engine {
         int _windowedWidth;
         int _windowedHeight;
         bool _resized = false;
-        bool _isFullscreen = false;
+        bool _isBorderlessFullscreen = false;
+        bool _isExclusiveFullscreen = false;
         std::function<void(double, double)> _scrollCallback;
         void InitGLFW();
+        GLFWmonitor* GetBestMonitor() const;
+        void SaveWindowedBounds();
 
     public:
         // Control
@@ -31,6 +34,7 @@ namespace Engine {
         WindowGLFW& operator=(const WindowGLFW&) = delete;
 
         void PollEvents();
+        void Show();
         bool ShouldClose() const;
 
         GLFWwindow* GetNativeHandle() const { return _window; };
@@ -46,6 +50,8 @@ namespace Engine {
         bool WasResized();
         void ResetResizedFlag();
         void ToggleMaximize();
+        void SetBorderlessFullscreen(bool enabled);
+        void SetExclusiveFullscreen(bool enabled);
         void SetScrollCallback(std::function<void(double, double)> callback);
         void HandleScroll(double xOffset, double yOffset);
     };

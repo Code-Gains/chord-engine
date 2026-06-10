@@ -1,6 +1,7 @@
 #include "Core.h"
 #include "stb_image.h"
 #include <imgui_impl_vulkan.h>
+#include <limits>
 
 namespace Engine {
 
@@ -354,6 +355,19 @@ std::vector<std::shared_ptr<MeshAsset>> Core::LoadGltfMeshAssets(Core *engine, f
         }
 
         if (!indices.empty() && !vertices.empty()) {
+            glm::vec3 minPosition(std::numeric_limits<float>::max());
+            glm::vec3 maxPosition(std::numeric_limits<float>::lowest());
+
+            for (const auto& vertex : vertices) {
+                minPosition = glm::min(minPosition, vertex.position);
+                maxPosition = glm::max(maxPosition, vertex.position);
+            }
+
+            newMesh.boundsCenter = (minPosition + maxPosition) * 0.5f;
+            newMesh.boundsRadius = glm::max(
+                glm::length(maxPosition - newMesh.boundsCenter),
+                0.01f);
+
             newMesh.meshBuffers = engine->UploadMesh(indices, vertices);
 
             auto vertexBuffer = newMesh.meshBuffers.vertexBuffer;

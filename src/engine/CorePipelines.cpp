@@ -117,14 +117,15 @@ void Core::InitMeshPipeline() {
     VkDescriptorSetLayout setLayouts[] = {
         _multiImageDescriptorLayout,      // set 0
         _gpuSceneDataDescriptorLayout,    // set 1
-        _environmentDescriptorLayout      // set 2
+        _environmentDescriptorLayout,     // set 2
+        _shadowDescriptorLayout           // set 3
     };
 
     VkPipelineLayoutCreateInfo pipeline_layout_info = vkinit::pipeline_layout_create_info();
     pipeline_layout_info.pPushConstantRanges = &bufferRange;
     pipeline_layout_info.pushConstantRangeCount = 1;
     pipeline_layout_info.pSetLayouts = setLayouts;
-    pipeline_layout_info.setLayoutCount = 3;
+    pipeline_layout_info.setLayoutCount = 4;
     VK_CHECK(vkCreatePipelineLayout(_device, &pipeline_layout_info, nullptr, &_meshPipelineLayout));
 
     PipelineBuilder pipelineBuilder;
@@ -139,8 +140,7 @@ void Core::InitMeshPipeline() {
     pipelineBuilder.set_polygon_mode(VK_POLYGON_MODE_FILL);
     //no backface culling
     pipelineBuilder.set_cull_mode(VK_CULL_MODE_NONE, VK_FRONT_FACE_CLOCKWISE);
-    //no multisampling
-    pipelineBuilder.set_multisampling_none();
+    pipelineBuilder.set_multisampling(_msaaSamples);
     //no blending
     pipelineBuilder.disable_blending();
     //pipelineBuilder.enable_blending_additive();
@@ -183,14 +183,15 @@ void Core::InitInstancedMeshPipeline() {
     VkDescriptorSetLayout setLayouts[] = {
         _multiImageDescriptorLayout,      // set 0
         _gpuSceneDataDescriptorLayout,    // set 1
-        _environmentDescriptorLayout      // set 2
+        _environmentDescriptorLayout,     // set 2
+        _shadowDescriptorLayout           // set 3
     };
 
     VkPipelineLayoutCreateInfo pipeline_layout_info = vkinit::pipeline_layout_create_info();
     pipeline_layout_info.pPushConstantRanges = &bufferRange;
     pipeline_layout_info.pushConstantRangeCount = 1;
     pipeline_layout_info.pSetLayouts = setLayouts;
-    pipeline_layout_info.setLayoutCount = 3;
+    pipeline_layout_info.setLayoutCount = 4;
 
     VK_CHECK(vkCreatePipelineLayout(_device, &pipeline_layout_info, nullptr, &_instancedMeshPipelineLayout));
 
@@ -206,9 +207,7 @@ void Core::InitInstancedMeshPipeline() {
     pipelineBuilder.set_polygon_mode(VK_POLYGON_MODE_FILL);
     //no backface culling
     pipelineBuilder.set_cull_mode(VK_CULL_MODE_NONE, VK_FRONT_FACE_CLOCKWISE);
-    //no multisampling
-    pipelineBuilder.set_multisampling_none();
-    //pipelineBuilder.set_multisampling(VK_SAMPLE_COUNT_4_BIT);
+    pipelineBuilder.set_multisampling(_msaaSamples);
     //no blending
     pipelineBuilder.disable_blending();
     //pipelineBuilder.enable_blending_additive();
@@ -230,6 +229,181 @@ void Core::InitInstancedMeshPipeline() {
     _mainDeletionQueue.push_function([&]() {
         vkDestroyPipelineLayout(_device, _instancedMeshPipelineLayout, nullptr);
         vkDestroyPipeline(_device, _instancedMeshPipeline, nullptr);
+    });
+}
+
+void Core::InitLinePipeline()
+{
+    VkShaderModule fragShader;
+    if (!LoadEngineShaderModule("shaders/line.frag.spv", &fragShader)) {
+        ENGINE_LOG_ERROR("Error when building the line fragment shader module");
+    }
+
+    VkShaderModule vertexShader;
+    if (!LoadEngineShaderModule("shaders/line.vert.spv", &vertexShader)) {
+        ENGINE_LOG_ERROR("Error when building the line vertex shader module");
+    }
+
+    VkPushConstantRange bufferRange{};
+    bufferRange.offset = 0;
+    bufferRange.size = sizeof(LineDrawPushConstants);
+    bufferRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+
+    VkPipelineLayoutCreateInfo pipelineLayoutInfo = vkinit::pipeline_layout_create_info();
+    pipelineLayoutInfo.pPushConstantRanges = &bufferRange;
+    pipelineLayoutInfo.pushConstantRangeCount = 1;
+    VK_CHECK(vkCreatePipelineLayout(_device, &pipelineLayoutInfo, nullptr, &_linePipelineLayout));
+
+    PipelineBuilder pipelineBuilder;
+    pipelineBuilder._pipelineLayout = _linePipelineLayout;
+    pipelineBuilder.set_shaders(vertexShader, fragShader);
+    pipelineBuilder.set_input_topology(VK_PRIMITIVE_TOPOLOGY_LINE_LIST);
+    pipelineBuilder.set_polygon_mode(VK_POLYGON_MODE_FILL);
+    pipelineBuilder.set_cull_mode(VK_CULL_MODE_NONE, VK_FRONT_FACE_CLOCKWISE);
+    pipelineBuilder.set_multisampling(_msaaSamples);
+    pipelineBuilder.enable_blending_alphablend();
+    pipelineBuilder.enable_depthtest(false, VK_COMPARE_OP_GREATER_OR_EQUAL);
+    pipelineBuilder.set_color_attachment_format(_drawImage.imageFormat);
+    pipelineBuilder.set_depth_format(_depthImage.imageFormat);
+
+    _linePipeline = pipelineBuilder.build_pipeline(_device);
+
+    vkDestroyShaderModule(_device, fragShader, nullptr);
+    vkDestroyShaderModule(_device, vertexShader, nullptr);
+
+    _mainDeletionQueue.push_function([&]() {
+        vkDestroyPipelineLayout(_device, _linePipelineLayout, nullptr);
+        vkDestroyPipeline(_device, _linePipeline, nullptr);
+    });
+}
+
+void Core::InitShadowPipeline()
+{
+    VkShaderModule fragShader;
+    if (!LoadEngineShaderModule("shaders/shadow_depth.frag.spv", &fragShader)) {
+        ENGINE_LOG_ERROR("Error when building the shadow fragment shader module");
+    }
+
+    VkShaderModule vertexShader;
+    if (!LoadEngineShaderModule("shaders/shadow_depth.vert.spv", &vertexShader)) {
+        ENGINE_LOG_ERROR("Error when building the shadow vertex shader module");
+    }
+
+    VkPushConstantRange bufferRange{};
+    bufferRange.offset = 0;
+    bufferRange.size = sizeof(ShadowDrawPushConstants);
+    bufferRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+
+    VkPipelineLayoutCreateInfo pipelineLayoutInfo = vkinit::pipeline_layout_create_info();
+    pipelineLayoutInfo.pPushConstantRanges = &bufferRange;
+    pipelineLayoutInfo.pushConstantRangeCount = 1;
+    VK_CHECK(vkCreatePipelineLayout(_device, &pipelineLayoutInfo, nullptr, &_shadowPipelineLayout));
+
+    PipelineBuilder pipelineBuilder;
+    pipelineBuilder._pipelineLayout = _shadowPipelineLayout;
+    pipelineBuilder.set_shaders(vertexShader, fragShader);
+    pipelineBuilder.set_input_topology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
+    pipelineBuilder.set_polygon_mode(VK_POLYGON_MODE_FILL);
+    pipelineBuilder.set_cull_mode(VK_CULL_MODE_NONE, VK_FRONT_FACE_CLOCKWISE);
+    pipelineBuilder.set_depth_bias(-1.25f, -1.75f);
+    pipelineBuilder.set_multisampling_none();
+    pipelineBuilder.disable_blending();
+    pipelineBuilder.enable_depthtest(true, VK_COMPARE_OP_GREATER_OR_EQUAL);
+    pipelineBuilder.set_no_color_attachment();
+    pipelineBuilder.set_depth_format(_shadowMapImage.imageFormat);
+
+    _shadowPipeline = pipelineBuilder.build_pipeline(_device);
+
+    vkDestroyShaderModule(_device, fragShader, nullptr);
+    vkDestroyShaderModule(_device, vertexShader, nullptr);
+
+    _mainDeletionQueue.push_function([&]() {
+        vkDestroyPipelineLayout(_device, _shadowPipelineLayout, nullptr);
+        vkDestroyPipeline(_device, _shadowPipeline, nullptr);
+    });
+}
+
+void Core::InitSelectionOutlinePipeline()
+{
+    VkShaderModule maskFragShader;
+    if (!LoadEngineShaderModule("shaders/selection_mask.frag.spv", &maskFragShader)) {
+        ENGINE_LOG_ERROR("Error when building the selection mask fragment shader module");
+    }
+
+    VkShaderModule maskVertexShader;
+    if (!LoadEngineShaderModule("shaders/selection_mask.vert.spv", &maskVertexShader)) {
+        ENGINE_LOG_ERROR("Error when building the selection mask vertex shader module");
+    }
+
+    VkPushConstantRange maskPushRange{};
+    maskPushRange.offset = 0;
+    maskPushRange.size = sizeof(SelectionMaskPushConstants);
+    maskPushRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+
+    VkPipelineLayoutCreateInfo maskLayoutInfo = vkinit::pipeline_layout_create_info();
+    maskLayoutInfo.pPushConstantRanges = &maskPushRange;
+    maskLayoutInfo.pushConstantRangeCount = 1;
+    VK_CHECK(vkCreatePipelineLayout(_device, &maskLayoutInfo, nullptr, &_selectionMaskPipelineLayout));
+
+    PipelineBuilder maskBuilder;
+    maskBuilder._pipelineLayout = _selectionMaskPipelineLayout;
+    maskBuilder.set_shaders(maskVertexShader, maskFragShader);
+    maskBuilder.set_input_topology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
+    maskBuilder.set_polygon_mode(VK_POLYGON_MODE_FILL);
+    maskBuilder.set_cull_mode(VK_CULL_MODE_NONE, VK_FRONT_FACE_CLOCKWISE);
+    maskBuilder.set_multisampling_none();
+    maskBuilder.disable_blending();
+    maskBuilder.disable_depthtest();
+    maskBuilder.set_color_attachment_format(_selectionMaskImage.imageFormat);
+
+    _selectionMaskPipeline = maskBuilder.build_pipeline(_device);
+
+    vkDestroyShaderModule(_device, maskFragShader, nullptr);
+    vkDestroyShaderModule(_device, maskVertexShader, nullptr);
+
+    VkShaderModule outlineFragShader;
+    if (!LoadEngineShaderModule("shaders/selection_outline.frag.spv", &outlineFragShader)) {
+        ENGINE_LOG_ERROR("Error when building the selection outline fragment shader module");
+    }
+
+    VkShaderModule fullscreenVertexShader;
+    if (!LoadEngineShaderModule("shaders/fullscreen_triangle.vert.spv", &fullscreenVertexShader)) {
+        ENGINE_LOG_ERROR("Error when building the fullscreen triangle vertex shader module");
+    }
+
+    VkPushConstantRange outlinePushRange{};
+    outlinePushRange.offset = 0;
+    outlinePushRange.size = sizeof(SelectionOutlinePushConstants);
+    outlinePushRange.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+    VkPipelineLayoutCreateInfo outlineLayoutInfo = vkinit::pipeline_layout_create_info();
+    outlineLayoutInfo.pPushConstantRanges = &outlinePushRange;
+    outlineLayoutInfo.pushConstantRangeCount = 1;
+    outlineLayoutInfo.pSetLayouts = &_singleImageDescriptorLayout;
+    outlineLayoutInfo.setLayoutCount = 1;
+    VK_CHECK(vkCreatePipelineLayout(_device, &outlineLayoutInfo, nullptr, &_selectionOutlinePipelineLayout));
+
+    PipelineBuilder outlineBuilder;
+    outlineBuilder._pipelineLayout = _selectionOutlinePipelineLayout;
+    outlineBuilder.set_shaders(fullscreenVertexShader, outlineFragShader);
+    outlineBuilder.set_input_topology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
+    outlineBuilder.set_polygon_mode(VK_POLYGON_MODE_FILL);
+    outlineBuilder.set_cull_mode(VK_CULL_MODE_NONE, VK_FRONT_FACE_CLOCKWISE);
+    outlineBuilder.set_multisampling_none();
+    outlineBuilder.enable_blending_alphablend();
+    outlineBuilder.disable_depthtest();
+    outlineBuilder.set_color_attachment_format(_drawImage.imageFormat);
+
+    _selectionOutlinePipeline = outlineBuilder.build_pipeline(_device);
+
+    vkDestroyShaderModule(_device, outlineFragShader, nullptr);
+    vkDestroyShaderModule(_device, fullscreenVertexShader, nullptr);
+
+    _mainDeletionQueue.push_function([&]() {
+        vkDestroyPipelineLayout(_device, _selectionMaskPipelineLayout, nullptr);
+        vkDestroyPipeline(_device, _selectionMaskPipeline, nullptr);
+        vkDestroyPipelineLayout(_device, _selectionOutlinePipelineLayout, nullptr);
+        vkDestroyPipeline(_device, _selectionOutlinePipeline, nullptr);
     });
 }
 
@@ -270,7 +444,7 @@ void Core::InitSkyboxPipeline()
     pipelineBuilder.set_input_topology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
     pipelineBuilder.set_polygon_mode(VK_POLYGON_MODE_FILL);
     pipelineBuilder.set_cull_mode(VK_CULL_MODE_NONE, VK_FRONT_FACE_CLOCKWISE);
-    pipelineBuilder.set_multisampling_none();
+    pipelineBuilder.set_multisampling(_msaaSamples);
     pipelineBuilder.disable_blending();
 
     // Skybox: depth test on, but depth write should ideally be off.

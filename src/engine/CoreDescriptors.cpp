@@ -71,6 +71,17 @@ void Core::InitDescriptors()
                 VK_SHADER_STAGE_FRAGMENT_BIT
             );
     }
+    // shadow data: set 3
+    {
+        DescriptorLayoutBuilder builder;
+        builder.AddBinding(0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER);
+
+        _shadowDescriptorLayout =
+            builder.Build(
+                _device,
+                VK_SHADER_STAGE_FRAGMENT_BIT
+            );
+    }
     { // skybox
         DescriptorLayoutBuilder builder;
         builder.AddBinding(0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER);

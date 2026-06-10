@@ -11,6 +11,7 @@
 
 #include <exception>
 #include <fstream>
+#include <glm/trigonometric.hpp>
 
 namespace Engine {
 namespace {
@@ -93,10 +94,16 @@ nlohmann::json WorldToJson(const Serialization::SerializedWorld& world)
         });
     }
 
-    return {
+    nlohmann::json root = {
         {"version", world.version},
         {"entities", entities}
     };
+
+    if (!world.editor.empty()) {
+        root["editor"] = world.editor;
+    }
+
+    return root;
 }
 
 nlohmann::json PrefabToJson(const Serialization::SerializedEntity& entity)
@@ -123,6 +130,7 @@ Serialization::SerializedWorld WorldFromJson(const nlohmann::json& root)
 {
     Serialization::SerializedWorld world;
     world.version = root.at("version").get<uint32_t>();
+    world.editor = root.value("editor", nlohmann::json::object());
 
     for (const auto& entityJson : root.at("entities")) {
         Serialization::SerializedEntity entity;
@@ -173,6 +181,52 @@ Serialization::SerializedEntity PrefabFromJson(const nlohmann::json& root)
     }
 
     return std::move(world.entities.front());
+}
+
+nlohmann::json CaptureEditorState(Core& core)
+{
+    auto& registry = core.GetRegistry();
+    auto cameraView = registry.view<Camera, Transform, ActiveCameraTag, CoreOwnedTag>();
+
+    if (cameraView.begin() == cameraView.end()) {
+        return nlohmann::json::object();
+    }
+
+    const auto cameraEntity = *cameraView.begin();
+    const auto& transform = cameraView.get<Transform>(cameraEntity);
+
+    return {
+        {"camera", {
+            {"position", Vec3ToJson(transform.position)},
+            {"rotation", QuatToJson(transform.rotation)}
+        }}
+    };
+}
+
+void ApplyEditorState(Core& core, const nlohmann::json& editorState)
+{
+    if (!editorState.contains("camera")) {
+        return;
+    }
+
+    auto& registry = core.GetRegistry();
+    auto cameraView = registry.view<Camera, Transform, ActiveCameraTag, CoreOwnedTag>();
+
+    if (cameraView.begin() == cameraView.end()) {
+        return;
+    }
+
+    const auto cameraEntity = *cameraView.begin();
+    auto& camera = cameraView.get<Camera>(cameraEntity);
+    auto& transform = cameraView.get<Transform>(cameraEntity);
+    const auto& cameraState = editorState.at("camera");
+
+    transform.position = Vec3FromJson(cameraState.at("position"));
+    transform.rotation = QuatFromJson(cameraState.at("rotation"));
+
+    camera.direction = glm::normalize(transform.rotation * glm::vec3{ 0.0f, 0.0f, -1.0f });
+    camera.pitch = glm::degrees(asin(glm::clamp(camera.direction.y, -1.0f, 1.0f)));
+    camera.yaw = glm::degrees(atan2(camera.direction.z, camera.direction.x));
 }
 
 } // namespace
@@ -375,6 +429,8 @@ Serialization::SerializedWorld WorldSerializer::CaptureWorld(Core& core) const
     Serialization::SerializedWorld world;
     auto& registry = core.GetRegistry();
 
+    world.editor = CaptureEditorState(core);
+
     for (auto entity : _componentSerializers.SerializableEntities(registry)) {
         if (registry.all_of<CoreOwnedTag>(entity)) {
             continue;
@@ -405,6 +461,8 @@ void WorldSerializer::ApplyWorld(Core& core, const Serialization::SerializedWorl
     for (const auto& serializedEntity : world.entities) {
         ApplyEntity(core, serializedEntity);
     }
+
+    ApplyEditorState(core, world.editor);
 }
 
 std::optional<Serialization::SerializedEntity> WorldSerializer::CaptureEntity(

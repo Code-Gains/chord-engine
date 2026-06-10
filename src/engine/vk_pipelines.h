@@ -26,16 +26,18 @@ public:
     void set_input_topology(VkPrimitiveTopology topology);
     void set_polygon_mode(VkPolygonMode mode);
     void set_cull_mode(VkCullModeFlags cullMode, VkFrontFace frontFace);
+    void set_depth_bias(float constantFactor, float slopeFactor, float clamp = 0.0f);
     void set_multisampling_none();
+    void set_multisampling(VkSampleCountFlagBits samples);
     void disable_blending();
     void enable_blending_additive();
     void enable_blending_alphablend();
 
     void set_color_attachment_format(VkFormat format);
+    void set_no_color_attachment();
 	void set_depth_format(VkFormat format);
 	void disable_depthtest();
     void enable_depthtest(bool depthWriteEnable,VkCompareOp op);
-    //void set_multisampling(VkSampleCountFlagBits samples);
 };
 
 namespace vkutil {

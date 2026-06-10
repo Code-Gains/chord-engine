@@ -31,6 +31,7 @@ struct SerializedEntity {
 
 struct SerializedWorld {
     uint32_t version = CurrentWorldVersion;
+    nlohmann::json editor = nlohmann::json::object();
     std::vector<SerializedEntity> entities;
 };
 

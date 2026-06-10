@@ -44,6 +44,10 @@
 #include "InputSystem.h"
 #include "MeshComponent.h"
 #include "EcsDebugger.h"
+// ============================================================================
+// Audio
+// ============================================================================
+#include "AudioSystem.h"
 
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wnullability-completeness"
@@ -104,6 +108,7 @@ struct GPUSceneData {
     glm::vec4 cameraPosition = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
     glm::vec4 sunlightDirection = glm::vec4(-0.3f, 1.0f, -0.6f, 3.0f);
     glm::vec4 ambientColor = glm::vec4(1.0f, 1.0f, 1.0f, 0.05f);
+    glm::mat4 lightViewProjection = glm::mat4(1.0f);
 };
 
 struct ComputePushConstants {
@@ -284,6 +289,10 @@ private:
     void InitImgui();
     void InitInstancedMeshPipeline();
     void InitMeshPipeline();
+    void InitLinePipeline();
+    void InitShadowResources();
+    void InitShadowPipeline();
+    void InitSelectionOutlinePipeline();
     void InitSkyboxPipeline();
     void InitDefaultData();
     void InitPrefilterPipeline();
@@ -390,6 +399,10 @@ private:
 
     void DrawBackground(VkCommandBuffer cmd);
     void DrawGeometry(VkCommandBuffer cmd);
+    void DrawLines(VkCommandBuffer cmd, const glm::mat4& viewProjection);
+    void DrawShadowMap(VkCommandBuffer cmd);
+    void DrawSelectedOutline(VkCommandBuffer cmd);
+    glm::mat4 BuildSunLightViewProjection();
     void DrawImGui(VkCommandBuffer cmd, VkImageView targetImageView);
 
     // ------------------------------------------------------------------------
@@ -412,8 +425,25 @@ private:
     // ------------------------------------------------------------------------
     VkPipelineLayout _instancedMeshPipelineLayout;
     VkPipelineLayout _meshPipelineLayout;
+    VkPipelineLayout _linePipelineLayout;
+    VkPipelineLayout _shadowPipelineLayout = VK_NULL_HANDLE;
+    VkPipelineLayout _selectionMaskPipelineLayout = VK_NULL_HANDLE;
+    VkPipelineLayout _selectionOutlinePipelineLayout = VK_NULL_HANDLE;
     VkPipeline _instancedMeshPipeline;
     VkPipeline _meshPipeline;
+    VkPipeline _linePipeline;
+    VkPipeline _shadowPipeline = VK_NULL_HANDLE;
+    VkPipeline _selectionMaskPipeline = VK_NULL_HANDLE;
+    VkPipeline _selectionOutlinePipeline = VK_NULL_HANDLE;
+
+    AllocatedImage _selectionMaskImage {};
+
+    AllocatedImage _shadowMapImage {};
+    VkSampler _shadowMapSampler = VK_NULL_HANDLE;
+    VkExtent2D _shadowMapExtent { 2048, 2048 };
+    glm::mat4 _sunLightViewProjection { 1.0f };
+    float _shadowOrthoRadius = 120.0f;
+    float _shadowDepthRadius = 350.0f;
 
     GPUMeshBuffers rectangle;
 
@@ -437,8 +467,10 @@ private:
     VkDescriptorSetLayout _singleImageDescriptorLayout;
     VkDescriptorSetLayout _multiImageDescriptorLayout;
     VkDescriptorSetLayout _environmentDescriptorLayout;
+    VkDescriptorSetLayout _shadowDescriptorLayout = VK_NULL_HANDLE;
 
     VkDescriptorSet _environmentDescriptorSet;
+    VkDescriptorSet _shadowDescriptorSet = VK_NULL_HANDLE;
 
     // ------------------------------------------------------------------------
     // ECS / systems / update state
@@ -565,6 +597,7 @@ public:
     AllocatedImage _msaaColorImage;
     AllocatedImage _msaaDepthImage;
     AllocatedImage _depthImage;
+    VkSampleCountFlagBits _msaaSamples = VK_SAMPLE_COUNT_1_BIT;
 
     // ------------------------------------------------------------------------
     // Public ECS access

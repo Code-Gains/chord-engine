@@ -32,6 +32,7 @@ add_library(engine STATIC
     ImGuiWindowRegistry.cpp
     ImGuiManager.cpp
     WorldSerializer.cpp
+    AudioSystem.cpp
 )
 
 target_compile_definitions(engine PRIVATE
@@ -81,6 +82,7 @@ target_link_libraries(engine
         EnTT::EnTT
         nlohmann_json::nlohmann_json
         Jolt
+        OpenALSoft
 )
 
 # ---------------------

@@ -71,6 +71,22 @@ void Core::InitVulkan() {
     _device = vkbDevice.device;
     _chosenGPU = physicalDevice.physical_device;
 
+    VkPhysicalDeviceProperties gpuProperties{};
+    vkGetPhysicalDeviceProperties(_chosenGPU, &gpuProperties);
+    const VkSampleCountFlags supportedSamples =
+        gpuProperties.limits.framebufferColorSampleCounts &
+        gpuProperties.limits.framebufferDepthSampleCounts;
+
+    if (supportedSamples & VK_SAMPLE_COUNT_4_BIT) {
+        _msaaSamples = VK_SAMPLE_COUNT_4_BIT;
+    }
+    else if (supportedSamples & VK_SAMPLE_COUNT_2_BIT) {
+        _msaaSamples = VK_SAMPLE_COUNT_2_BIT;
+    }
+    else {
+        _msaaSamples = VK_SAMPLE_COUNT_1_BIT;
+    }
+
     // use vkbootstrap to get a Graphics queue
     _graphicsQueue = vkbDevice.get_queue(vkb::QueueType::graphics).value();
     _graphicsQueueFamily = vkbDevice.get_queue_index(vkb::QueueType::graphics).value();
@@ -203,6 +219,54 @@ void Core::InitImgui()
     _mainDeletionQueue.push_function([=, this]() {
         ImGui_ImplVulkan_Shutdown();
         vkDestroyDescriptorPool(_device, imguiPool, nullptr);
+    });
+}
+
+void Core::InitShadowResources()
+{
+    _shadowMapImage = CreateImage(
+        VkExtent3D{_shadowMapExtent.width, _shadowMapExtent.height, 1},
+        VK_FORMAT_D32_SFLOAT,
+        VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT
+    );
+
+    VkSamplerCreateInfo samplerInfo{.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
+    samplerInfo.magFilter = VK_FILTER_LINEAR;
+    samplerInfo.minFilter = VK_FILTER_LINEAR;
+    samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+    samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
+    samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
+    samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
+    samplerInfo.borderColor = VK_BORDER_COLOR_FLOAT_OPAQUE_BLACK;
+    samplerInfo.compareEnable = VK_FALSE;
+    samplerInfo.minLod = 0.0f;
+    samplerInfo.maxLod = 1.0f;
+
+    VK_CHECK(vkCreateSampler(_device, &samplerInfo, nullptr, &_shadowMapSampler));
+    _shadowMapImage.sampler = _shadowMapSampler;
+
+    _shadowDescriptorSet =
+        globalDescriptorAllocator.Allocate(_device, _shadowDescriptorLayout);
+
+    DescriptorWriter writer;
+    writer.write_image(
+        0,
+        _shadowMapImage.imageView,
+        _shadowMapSampler,
+        VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL,
+        VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER
+    );
+    writer.update_set(_device, _shadowDescriptorSet);
+
+    _shadowMapImage.imguiDescriptorSet = ImGui_ImplVulkan_AddTexture(
+        _shadowMapSampler,
+        _shadowMapImage.imageView,
+        VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL
+    );
+
+    _mainDeletionQueue.push_function([&]() {
+        vkDestroySampler(_device, _shadowMapSampler, nullptr);
+        DestroyImage(_shadowMapImage);
     });
 }
 

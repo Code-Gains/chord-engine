@@ -9,12 +9,16 @@ using Clock = std::chrono::high_resolution_clock;
 #include "Transform.h"
 #include "Camera.h"
 #include "CameraSystem.h"
+#include "LineComponent.h"
 #include "NameComponent.h"
 #include "WorldSerializer.h"
+#include "EditorSelection.h"
 
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_vulkan.h>
+
+#include <limits>
 
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb_image_write.h"
@@ -31,6 +35,8 @@ using Clock = std::chrono::high_resolution_clock;
 #include "EcsDebugger.h"
 #include "SunlightComponent.h"
 #include "ImGuiWindowRegistry.h"
+
+#include <glm/gtc/matrix_transform.hpp>
 
 namespace Engine {
 #ifndef NDEBUG
@@ -200,8 +206,10 @@ void Core::Init()
     InitCommands();
     InitSyncStructures();
     InitDescriptors();
+    InitShadowResources();
     InitPipelines();
     InitDefaultData();
+    _window->Show();
 
     // ImGui Window Manager context
     auto& windowRegistry = _registry.ctx().emplace<ImGuiWindowRegistry>();
@@ -232,6 +240,9 @@ void Core::InitPipelines()
     InitPrefilterPipeline();
     InitMeshPipeline();
     InitInstancedMeshPipeline();
+    InitShadowPipeline();
+    InitLinePipeline();
+    InitSelectionOutlinePipeline();
     InitSkyboxPipeline();
 }
 
@@ -304,6 +315,25 @@ void Core::Run() {
         {
             if (ImGui::Begin("Texture Debugger", &open))
             {
+                ImGui::Text("Shadow Map");
+                ImGui::Text(
+                    "%ux%u",
+                    _shadowMapExtent.width,
+                    _shadowMapExtent.height
+                );
+
+                ImTextureID shadowId =
+                    reinterpret_cast<ImTextureID>(_shadowMapImage.imguiDescriptorSet);
+
+                if (shadowId) {
+                    ImGui::Image(shadowId, ImVec2(256.0f, 256.0f));
+                }
+                else {
+                    ImGui::TextDisabled("Missing shadow map ImGui descriptor");
+                }
+
+                ImGui::Separator();
+
                 for (size_t i = 0; i < _loadedImages.size(); i++)
                 {
                     auto& image = _loadedImages[i];
@@ -467,13 +497,22 @@ void Core::Draw()
 
     // transition our main draw image into general layout so we can write into it
     // we will overwrite it all so we dont care about what was the older layout
+    DrawShadowMap(cmd);
+
     vkutil::transition_image(cmd, _drawImage.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL);
     DrawBackground(cmd);
     
     //vkutil::transition_image(cmd, _drawImage.image, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
     vkutil::transition_image(cmd, _drawImage.image, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
-    vkutil::transition_image(cmd, _depthImage.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL);
+    if (_msaaSamples != VK_SAMPLE_COUNT_1_BIT) {
+        vkutil::transition_image(cmd, _msaaColorImage.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+        vkutil::transition_image(cmd, _msaaDepthImage.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL);
+    }
+    else {
+        vkutil::transition_image(cmd, _depthImage.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL);
+    }
     DrawGeometry(cmd);
+    DrawSelectedOutline(cmd);
     { // TODO move to some other file
         if (camera && camera->screenshotRequested)
         {
@@ -685,6 +724,7 @@ void Core::DrawGeometry(VkCommandBuffer cmd)
     }
 
     sceneData.cameraPosition = glm::vec4(renderCameraTransform.position, 1.0f);
+    sceneData.lightViewProjection = _sunLightViewProjection;
 
     //write the buffer
     GPUSceneData* sceneUniformData = (GPUSceneData*)gpuSceneDataBuffer.allocation->GetMappedData();
@@ -697,9 +737,24 @@ void Core::DrawGeometry(VkCommandBuffer cmd)
     writer.write_buffer(0, gpuSceneDataBuffer.buffer, sizeof(GPUSceneData), 0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);
     writer.update_set(_device, globalDescriptor);
 
-    //begin a render pass  connected to our draw image
-    VkRenderingAttachmentInfo colorAttachment = vkinit::attachment_info(_drawImage.imageView, nullptr, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
-    VkRenderingAttachmentInfo depthAttachment = vkinit::depth_attachment_info(_depthImage.imageView, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL);
+    VkClearValue colorClear{};
+    colorClear.color = {{0.0f, 0.0f, 0.0f, 1.0f}};
+
+    VkRenderingAttachmentInfo colorAttachment =
+        _msaaSamples != VK_SAMPLE_COUNT_1_BIT
+            ? vkinit::attachment_info(_msaaColorImage.imageView, &colorClear, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL)
+            : vkinit::attachment_info(_drawImage.imageView, nullptr, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+
+    if (_msaaSamples != VK_SAMPLE_COUNT_1_BIT) {
+        colorAttachment.resolveMode = VK_RESOLVE_MODE_AVERAGE_BIT;
+        colorAttachment.resolveImageView = _drawImage.imageView;
+        colorAttachment.resolveImageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    }
+
+    VkRenderingAttachmentInfo depthAttachment =
+        _msaaSamples != VK_SAMPLE_COUNT_1_BIT
+            ? vkinit::depth_attachment_info(_msaaDepthImage.imageView, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL)
+            : vkinit::depth_attachment_info(_depthImage.imageView, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL);
 
     VkRenderingInfo renderInfo = vkinit::rendering_info(_drawExtent, &colorAttachment, &depthAttachment);
     
@@ -759,6 +814,7 @@ void Core::DrawGeometry(VkCommandBuffer cmd)
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, _instancedMeshPipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, _instancedMeshPipelineLayout, 1, 1, &globalDescriptor, 0, nullptr);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, _instancedMeshPipelineLayout, 2, 1, &_environmentDescriptorSet, 0, nullptr);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, _instancedMeshPipelineLayout, 3, 1, &_shadowDescriptorSet, 0, nullptr);
     // ECS Batch Rendering
     {
         auto t0 = Clock::now();
@@ -920,6 +976,7 @@ void Core::DrawGeometry(VkCommandBuffer cmd)
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, _meshPipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, _meshPipelineLayout, 2, 1, &_environmentDescriptorSet, 0, nullptr);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, _meshPipelineLayout, 3, 1, &_shadowDescriptorSet, 0, nullptr);
     // ECS Singles rendering
     auto registryViewSingles = _registry.view<MeshComponent, Transform, SingleRenderTag>();
 
@@ -1015,6 +1072,410 @@ void Core::DrawGeometry(VkCommandBuffer cmd)
         
         vkCmdDrawIndexed(cmd, surface.count, 1, surface.startIndex, 0, 0);
     }
+
+    DrawLines(cmd, projectionMatrix * viewMatrix);
+
+    vkCmdEndRendering(cmd);
+}
+
+glm::mat4 Core::BuildSunLightViewProjection()
+{
+    glm::vec3 lightDirection = glm::vec3(sceneData.sunlightDirection);
+    if (glm::dot(lightDirection, lightDirection) < 0.0001f) {
+        lightDirection = glm::vec3(-0.3f, 1.0f, -0.6f);
+    }
+    lightDirection = glm::normalize(lightDirection);
+
+    glm::vec3 center{0.0f};
+
+    auto cameraEntity = ResolveRenderCameraEntity();
+    if (cameraEntity != entt::null &&
+        _registry.valid(cameraEntity) &&
+        _registry.all_of<Camera, Transform>(cameraEntity)) {
+        const auto& cameraTransform = _registry.get<Transform>(cameraEntity);
+        const glm::vec3 cameraForward =
+            glm::normalize(cameraTransform.rotation * glm::vec3(0.0f, 0.0f, -1.0f));
+
+        center =
+            cameraTransform.position +
+            cameraForward * (_shadowOrthoRadius * 0.35f);
+    }
+
+    const float radius = glm::max(_shadowOrthoRadius, 1.0f);
+    float depthRadius = glm::max(_shadowDepthRadius, radius * 2.0f);
+
+    auto meshView = _registry.view<MeshComponent, Transform>();
+    for (auto entity : meshView) {
+        const auto& mesh = meshView.get<MeshComponent>(entity);
+        if (!mesh.mesh || mesh.mesh->surfaces.empty()) {
+            continue;
+        }
+
+        const auto& transform = meshView.get<Transform>(entity);
+        const glm::vec3 absScale = glm::abs(transform.scale);
+        const float maxScale = glm::max(absScale.x, glm::max(absScale.y, absScale.z));
+        const glm::vec3 scaledLocalCenter = mesh.mesh->boundsCenter * transform.scale;
+        const glm::vec3 worldCenter =
+            transform.position +
+            transform.rotation * scaledLocalCenter;
+        const float worldRadius = mesh.mesh->boundsRadius * maxScale;
+        const float distanceAlongLight =
+            glm::abs(glm::dot(worldCenter - center, lightDirection)) +
+            worldRadius;
+
+        depthRadius = glm::max(depthRadius, distanceAlongLight + 25.0f);
+    }
+
+    const glm::vec3 lightPosition = center + lightDirection * depthRadius;
+    glm::vec3 up{0.0f, 1.0f, 0.0f};
+    if (glm::abs(glm::dot(up, lightDirection)) > 0.95f) {
+        up = glm::vec3(1.0f, 0.0f, 0.0f);
+    }
+
+    glm::mat4 lightView = glm::lookAt(lightPosition, center, up);
+    glm::mat4 lightProjection = glm::ortho(
+        -radius,
+        radius,
+        -radius,
+        radius,
+        depthRadius * 2.0f,
+        0.1f);
+    lightProjection[1][1] *= -1.0f;
+
+    return lightProjection * lightView;
+}
+
+void Core::DrawShadowMap(VkCommandBuffer cmd)
+{
+    if (_shadowPipeline == VK_NULL_HANDLE ||
+        _shadowPipelineLayout == VK_NULL_HANDLE ||
+        _shadowMapImage.image == VK_NULL_HANDLE) {
+        return;
+    }
+
+    auto sunlightView = _registry.view<SunlightComponent>();
+    if (!sunlightView.empty()) {
+        auto lightEntity = *sunlightView.begin();
+        const auto& sunlight = sunlightView.get<SunlightComponent>(lightEntity);
+        sceneData.sunlightDirection = glm::vec4(glm::normalize(sunlight.direction), sunlight.intensity);
+    }
+
+    _sunLightViewProjection = BuildSunLightViewProjection();
+
+    VkImageSubresourceRange depthRange = vkinit::image_subresource_range(VK_IMAGE_ASPECT_DEPTH_BIT);
+    vkutil::transition_image(
+        cmd,
+        _shadowMapImage.image,
+        VK_IMAGE_LAYOUT_UNDEFINED,
+        VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+        depthRange);
+
+    VkRenderingAttachmentInfo depthAttachment =
+        vkinit::depth_attachment_info(_shadowMapImage.imageView, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL);
+
+    VkRenderingInfo renderInfo =
+        vkinit::rendering_info(_shadowMapExtent, nullptr, &depthAttachment);
+
+    vkCmdBeginRendering(cmd, &renderInfo);
+
+    VkViewport viewport{};
+    viewport.x = 0.0f;
+    viewport.y = 0.0f;
+    viewport.width = static_cast<float>(_shadowMapExtent.width);
+    viewport.height = static_cast<float>(_shadowMapExtent.height);
+    viewport.minDepth = 0.0f;
+    viewport.maxDepth = 1.0f;
+    vkCmdSetViewport(cmd, 0, 1, &viewport);
+
+    VkRect2D scissor{};
+    scissor.offset = {0, 0};
+    scissor.extent = _shadowMapExtent;
+    vkCmdSetScissor(cmd, 0, 1, &scissor);
+
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, _shadowPipeline);
+
+    auto meshView = _registry.view<MeshComponent, Transform>();
+    for (auto entity : meshView) {
+        auto& meshComponent = meshView.get<MeshComponent>(entity);
+        auto& transformComponent = meshView.get<Transform>(entity);
+
+        auto meshAssetPtr = meshComponent.mesh.get();
+        if (!meshAssetPtr || meshAssetPtr->surfaces.empty()) {
+            continue;
+        }
+
+        glm::mat4 model =
+            glm::translate(glm::mat4(1.0f), transformComponent.position) *
+            glm::mat4_cast(transformComponent.rotation) *
+            glm::scale(glm::mat4(1.0f), transformComponent.scale);
+
+        ShadowDrawPushConstants pushConstants{};
+        pushConstants.lightViewProjection = _sunLightViewProjection;
+        pushConstants.model = model;
+        pushConstants.vertexBuffer = meshAssetPtr->meshBuffers.vertexBufferAddress;
+
+        vkCmdPushConstants(
+            cmd,
+            _shadowPipelineLayout,
+            VK_SHADER_STAGE_VERTEX_BIT,
+            0,
+            sizeof(pushConstants),
+            &pushConstants);
+
+        vkCmdBindIndexBuffer(cmd, meshAssetPtr->meshBuffers.indexBuffer.buffer, 0, VK_INDEX_TYPE_UINT32);
+
+        for (const auto& surface : meshAssetPtr->surfaces) {
+            vkCmdDrawIndexed(cmd, surface.count, 1, surface.startIndex, 0, 0);
+        }
+    }
+
+    vkCmdEndRendering(cmd);
+
+    vkutil::transition_image(
+        cmd,
+        _shadowMapImage.image,
+        VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+        VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL,
+        depthRange);
+}
+
+void Core::DrawLines(VkCommandBuffer cmd, const glm::mat4& viewProjection)
+{
+    if (_linePipeline == VK_NULL_HANDLE || _linePipelineLayout == VK_NULL_HANDLE) {
+        return;
+    }
+
+    std::vector<LineVertex> vertices;
+    std::vector<entt::entity> expiredLines;
+
+    auto lineView = _registry.view<LineComponent>();
+    vertices.reserve(128);
+
+    for (auto entity : lineView) {
+        auto& line = lineView.get<LineComponent>(entity);
+        vertices.push_back(LineVertex{ line.start, 0.0f, line.color });
+        vertices.push_back(LineVertex{ line.end, 0.0f, line.color });
+
+        if (!line.persistent) {
+            line.remainingTime -= _deltaTime;
+            if (line.remainingTime <= 0.0f) {
+                expiredLines.push_back(entity);
+            }
+        }
+    }
+
+    if (vertices.empty()) {
+        for (auto entity : expiredLines) {
+            if (_registry.valid(entity)) {
+                _registry.destroy(entity);
+            }
+        }
+        return;
+    }
+
+    const size_t bufferSize = vertices.size() * sizeof(LineVertex);
+    AllocatedBuffer lineBuffer = CreateBuffer(
+        bufferSize,
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+        VMA_MEMORY_USAGE_CPU_TO_GPU);
+
+    memcpy(lineBuffer.info.pMappedData, vertices.data(), bufferSize);
+
+    GetCurrentFrame()._deletionQueue.push_function([=, this]() {
+        DestroyBuffer(lineBuffer);
+    });
+
+    LineDrawPushConstants pushConstants{};
+    pushConstants.viewProjection = viewProjection;
+    pushConstants.vertexBuffer = lineBuffer.deviceAddress;
+
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, _linePipeline);
+    vkCmdPushConstants(
+        cmd,
+        _linePipelineLayout,
+        VK_SHADER_STAGE_VERTEX_BIT,
+        0,
+        sizeof(pushConstants),
+        &pushConstants);
+
+    vkCmdDraw(cmd, static_cast<uint32_t>(vertices.size()), 1, 0, 0);
+
+    for (auto entity : expiredLines) {
+        if (_registry.valid(entity)) {
+            _registry.destroy(entity);
+        }
+    }
+}
+
+void Core::DrawSelectedOutline(VkCommandBuffer cmd)
+{
+    if (_selectionMaskPipeline == VK_NULL_HANDLE ||
+        _selectionMaskPipelineLayout == VK_NULL_HANDLE ||
+        _selectionOutlinePipeline == VK_NULL_HANDLE ||
+        _selectionOutlinePipelineLayout == VK_NULL_HANDLE ||
+        _selectionMaskImage.image == VK_NULL_HANDLE) {
+        return;
+    }
+
+    std::vector<entt::entity> outlineEntities;
+
+    if (!IsPlayMode() && _registry.ctx().contains<EditorSelection>()) {
+        const auto& selection = _registry.ctx().get<EditorSelection>();
+        if (selection.selectedEntity != entt::null &&
+            _registry.valid(selection.selectedEntity) &&
+            _registry.all_of<MeshComponent, Transform>(selection.selectedEntity)) {
+            outlineEntities.push_back(selection.selectedEntity);
+        }
+    }
+
+    auto cameraEntity = ResolveRenderCameraEntity();
+    if (cameraEntity == entt::null ||
+        !_registry.valid(cameraEntity) ||
+        !_registry.all_of<Camera, Transform>(cameraEntity)) {
+        return;
+    }
+
+    if (outlineEntities.empty()) {
+        return;
+    }
+
+    const auto& renderCamera = _registry.get<Camera>(cameraEntity);
+    const auto& renderCameraTransform = _registry.get<Transform>(cameraEntity);
+    const glm::mat4 viewProjection =
+        renderCamera.GetProjectionMatrix() *
+        renderCamera.GetViewMatrix(renderCameraTransform);
+
+    VkImageSubresourceRange colorRange =
+        vkinit::image_subresource_range(VK_IMAGE_ASPECT_COLOR_BIT);
+
+    vkutil::transition_image(
+        cmd,
+        _selectionMaskImage.image,
+        VK_IMAGE_LAYOUT_UNDEFINED,
+        VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+        colorRange);
+
+    VkClearValue maskClear{};
+    maskClear.color = {{0.0f, 0.0f, 0.0f, 0.0f}};
+
+    VkRenderingAttachmentInfo maskAttachment =
+        vkinit::attachment_info(
+            _selectionMaskImage.imageView,
+            &maskClear,
+            VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+
+    VkRenderingInfo maskRenderInfo =
+        vkinit::rendering_info(_drawExtent, &maskAttachment, nullptr);
+
+    vkCmdBeginRendering(cmd, &maskRenderInfo);
+
+    VkViewport viewport{};
+    viewport.x = 0.0f;
+    viewport.y = 0.0f;
+    viewport.width = static_cast<float>(_drawExtent.width);
+    viewport.height = static_cast<float>(_drawExtent.height);
+    viewport.minDepth = 0.0f;
+    viewport.maxDepth = 1.0f;
+    vkCmdSetViewport(cmd, 0, 1, &viewport);
+
+    VkRect2D scissor{};
+    scissor.offset = {0, 0};
+    scissor.extent = _drawExtent;
+    vkCmdSetScissor(cmd, 0, 1, &scissor);
+
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, _selectionMaskPipeline);
+
+    for (auto entity : outlineEntities) {
+        const auto& meshComponent = _registry.get<MeshComponent>(entity);
+        const auto& transformComponent = _registry.get<Transform>(entity);
+        auto* meshAsset = meshComponent.mesh.get();
+        if (!meshAsset || meshAsset->surfaces.empty()) {
+            continue;
+        }
+
+        const glm::mat4 model =
+            glm::translate(glm::mat4(1.0f), transformComponent.position) *
+            glm::mat4_cast(transformComponent.rotation) *
+            glm::scale(glm::mat4(1.0f), transformComponent.scale);
+
+        SelectionMaskPushConstants maskPushConstants{};
+        maskPushConstants.viewProjection = viewProjection;
+        maskPushConstants.model = model;
+        maskPushConstants.vertexBuffer = meshAsset->meshBuffers.vertexBufferAddress;
+
+        vkCmdPushConstants(
+            cmd,
+            _selectionMaskPipelineLayout,
+            VK_SHADER_STAGE_VERTEX_BIT,
+            0,
+            sizeof(maskPushConstants),
+            &maskPushConstants);
+
+        vkCmdBindIndexBuffer(cmd, meshAsset->meshBuffers.indexBuffer.buffer, 0, VK_INDEX_TYPE_UINT32);
+        for (const auto& surface : meshAsset->surfaces) {
+            vkCmdDrawIndexed(cmd, surface.count, 1, surface.startIndex, 0, 0);
+        }
+    }
+
+    vkCmdEndRendering(cmd);
+
+    vkutil::transition_image(
+        cmd,
+        _selectionMaskImage.image,
+        VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+        colorRange);
+
+    VkDescriptorSet maskSet =
+        GetCurrentFrame()._frameDescriptors.allocate(_device, _singleImageDescriptorLayout);
+
+    DescriptorWriter writer;
+    writer.write_image(
+        0,
+        _selectionMaskImage.imageView,
+        _defaultSamplerNearest,
+        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+        VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER);
+    writer.update_set(_device, maskSet);
+
+    VkRenderingAttachmentInfo outlineAttachment =
+        vkinit::attachment_info(_drawImage.imageView, nullptr, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+
+    VkRenderingInfo outlineRenderInfo =
+        vkinit::rendering_info(_drawExtent, &outlineAttachment, nullptr);
+
+    vkCmdBeginRendering(cmd, &outlineRenderInfo);
+
+    vkCmdSetViewport(cmd, 0, 1, &viewport);
+    vkCmdSetScissor(cmd, 0, 1, &scissor);
+
+    SelectionOutlinePushConstants outlinePushConstants{};
+    outlinePushConstants.color = glm::vec4(0.2f, 1.0f, 0.35f, 0.95f);
+    outlinePushConstants.texelSize = glm::vec2(
+        1.0f / static_cast<float>(_drawExtent.width),
+        1.0f / static_cast<float>(_drawExtent.height));
+    outlinePushConstants.thickness = 2.5f;
+
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, _selectionOutlinePipeline);
+    vkCmdBindDescriptorSets(
+        cmd,
+        VK_PIPELINE_BIND_POINT_GRAPHICS,
+        _selectionOutlinePipelineLayout,
+        0,
+        1,
+        &maskSet,
+        0,
+        nullptr);
+    vkCmdPushConstants(
+        cmd,
+        _selectionOutlinePipelineLayout,
+        VK_SHADER_STAGE_FRAGMENT_BIT,
+        0,
+        sizeof(outlinePushConstants),
+        &outlinePushConstants);
+
+    vkCmdDraw(cmd, 3, 1, 0, 0);
+
     vkCmdEndRendering(cmd);
 }
 

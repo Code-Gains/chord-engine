@@ -172,9 +172,32 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(JoltPhysics)
 
 # ---------------------
+# OpenAL Soft
+# ---------------------
+set(ALSOFT_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(ALSOFT_UTILS OFF CACHE BOOL "" FORCE)
+set(ALSOFT_TESTS OFF CACHE BOOL "" FORCE)
+set(ALSOFT_INSTALL OFF CACHE BOOL "" FORCE)
+
+FetchContent_Declare(
+    openal_soft
+    GIT_REPOSITORY https://github.com/kcat/openal-soft.git
+    GIT_TAG 1.24.3
+)
+
+FetchContent_MakeAvailable(openal_soft)
+
+add_library(OpenALSoft INTERFACE)
+target_link_libraries(OpenALSoft INTERFACE OpenAL)
+target_include_directories(OpenALSoft INTERFACE
+    ${openal_soft_SOURCE_DIR}/include
+)
+message(STATUS "OpenAL source dir: ${openal_soft_SOURCE_DIR}")
+
+# ---------------------
 # Shaders
 # ---------------------
-set(SHADER_DIR "${CMAKE_SOURCE_DIR}/shaders" CACHE PATH "Shader directory")
+set(SHADER_DIR "${CMAKE_CURRENT_LIST_DIR}/shaders" CACHE PATH "Shader directory" FORCE)
 
 # ---------------------
 # Add src folders

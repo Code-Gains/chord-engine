@@ -16,17 +16,21 @@ layout(set = 1, binding = 0) uniform SceneData {
     vec4 cameraPosition;
     vec4 sunlightDirection; // xyz = direction, w = intensity
     vec4 ambientColor;
+    mat4 lightViewProjection;
 } sceneData;
 
 layout(set = 2, binding = 0) uniform samplerCube irradianceMap;
 layout(set = 2, binding = 1) uniform samplerCube prefilteredMap;
 layout(set = 2, binding = 2) uniform sampler2D brdfLUT;
 
+layout(set = 3, binding = 0) uniform sampler2D shadowMap;
+
 layout (location = 0) out vec4 outFragColor;
 
 const float PI = 3.14159265359;
 const float MIN_ROUGHNESS = 0.04;
 const float IBL_INTENSITY = 0.25;
+const float SHADOW_NORMAL_BIAS = 0.12;
 
 vec3 fresnelSchlick(vec3 F0, vec3 F90, float VdotH)
 {
@@ -83,6 +87,33 @@ vec3 ACESFilm(vec3 x)
     return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
 }
 
+float sampleShadow(vec3 normal, vec3 lightDirection)
+{
+    vec3 shadowPosition = inPos + normal * SHADOW_NORMAL_BIAS;
+    vec4 lightClip = sceneData.lightViewProjection * vec4(shadowPosition, 1.0);
+    vec3 lightNdc = lightClip.xyz / lightClip.w;
+    vec2 shadowUv = lightNdc.xy * 0.5 + 0.5;
+
+    if (shadowUv.x < 0.0 || shadowUv.x > 1.0 ||
+        shadowUv.y < 0.0 || shadowUv.y > 1.0 ||
+        lightNdc.z < 0.0 || lightNdc.z > 1.0) {
+        return 1.0;
+    }
+
+    vec2 texelSize = 1.0 / vec2(textureSize(shadowMap, 0));
+    float bias = max(0.00002, 0.00015 * (1.0 - clamp(dot(normal, lightDirection), 0.0, 1.0)));
+    float lit = 0.0;
+
+    for (int y = -1; y <= 1; y++) {
+        for (int x = -1; x <= 1; x++) {
+            float closestReversedDepth = texture(shadowMap, shadowUv + vec2(x, y) * texelSize).r;
+            lit += lightNdc.z + bias >= closestReversedDepth ? 1.0 : 0.0;
+        }
+    }
+
+    return lit / 9.0;
+}
+
 void main()
 {
     // outFragColor = vec4(abs(inTangent.xyz), 1.0);
@@ -115,7 +146,7 @@ void main()
     vec3 v = normalize(sceneData.cameraPosition.xyz - inPos);
     vec3 h = normalize(l + v);
 
-    float NdotL = clamp(dot(n, l), 0.001, 1.0);
+    float NdotL = max(dot(n, l), 0.0);
     float NdotV = clamp(abs(dot(n, v)), 0.001, 1.0);
     float NdotH = clamp(dot(n, h), 0.0, 1.0);
     float VdotH = clamp(dot(v, h), 0.0, 1.0);
@@ -155,7 +186,8 @@ void main()
         sceneData.ambientColor.rgb *
         sceneData.ambientColor.a;
         
-    vec3 color = ambient + NdotL * lightColor * (diffuseContrib + specContrib);
+    float shadow = NdotL > 0.0 ? sampleShadow(n, l) : 0.0;
+    vec3 color = ambient + shadow * NdotL * lightColor * (diffuseContrib + specContrib);
 	color *= ao;
 
     color += emissive;

@@ -12,7 +12,7 @@ EcsDebugger::EcsDebugger(entt::registry& registry) : System(registry)
 
     windowRegistry.RegisterWindow(
         "ECS Debugger",
-        true
+        false
     );
 }
 

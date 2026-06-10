@@ -84,13 +84,37 @@ void Core::CreateDrawImages(uint32_t width, uint32_t height)
         VK_SAMPLE_COUNT_1_BIT
     );
 
-    // --------------------------
-    // SINGLE-SAMPLE DEPTH IMAGE (optional fallback)
-    // --------------------------
+    _msaaColorImage = CreateImage(
+        drawImageExtent,
+        _drawImage.imageFormat,
+        VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
+        VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT,
+        false,
+        _msaaSamples
+    );
+
+    _msaaDepthImage = CreateImage(
+        drawImageExtent,
+        VK_FORMAT_D32_SFLOAT,
+        VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
+        VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT,
+        false,
+        _msaaSamples
+    );
+
     _depthImage = CreateImage(
         drawImageExtent,
         VK_FORMAT_D32_SFLOAT,
         VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
+        false,
+        VK_SAMPLE_COUNT_1_BIT
+    );
+
+    _selectionMaskImage = CreateImage(
+        drawImageExtent,
+        VK_FORMAT_R8_UNORM,
+        VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
+        VK_IMAGE_USAGE_SAMPLED_BIT,
         false,
         VK_SAMPLE_COUNT_1_BIT
     );
@@ -101,8 +125,17 @@ void Core::CleanupDrawImages()
     vkDestroyImageView(_device, _drawImage.imageView, nullptr);
     vmaDestroyImage(_allocator, _drawImage.image, _drawImage.allocation);
 
+    vkDestroyImageView(_device, _msaaColorImage.imageView, nullptr);
+    vmaDestroyImage(_allocator, _msaaColorImage.image, _msaaColorImage.allocation);
+
+    vkDestroyImageView(_device, _msaaDepthImage.imageView, nullptr);
+    vmaDestroyImage(_allocator, _msaaDepthImage.image, _msaaDepthImage.allocation);
+
     vkDestroyImageView(_device, _depthImage.imageView, nullptr);
     vmaDestroyImage(_allocator, _depthImage.image, _depthImage.allocation);
+
+    vkDestroyImageView(_device, _selectionMaskImage.imageView, nullptr);
+    vmaDestroyImage(_allocator, _selectionMaskImage.image, _selectionMaskImage.allocation);
 }
 
 void Core::UpdateDrawImageDescriptor()
@@ -123,6 +156,7 @@ void Core::CleanupDrawImageDescriptors()
     vkDestroyDescriptorSetLayout(_device, _singleImageDescriptorLayout , nullptr);
     vkDestroyDescriptorSetLayout(_device, _multiImageDescriptorLayout , nullptr);
     vkDestroyDescriptorSetLayout(_device, _environmentDescriptorLayout , nullptr);
+    vkDestroyDescriptorSetLayout(_device, _shadowDescriptorLayout , nullptr);
     vkDestroyDescriptorSetLayout(_device, _skyboxDescriptorLayout , nullptr);
 }
 
