@@ -2,6 +2,7 @@
 
 #include "Core.h"
 #include "GravityComponents.h"
+#include "RuntimePauseState.h"
 #include "Transform.h"
 
 #include <glm/geometric.hpp>
@@ -16,6 +17,9 @@ VelocityIntegrationSystem::VelocityIntegrationSystem(entt::registry& registry, E
 void VelocityIntegrationSystem::FixedUpdate(float deltaTime)
 {
     if (_core && !_core->IsPlayMode()) {
+        return;
+    }
+    if (Engine::IsGameplayPaused(_registry)) {
         return;
     }
 

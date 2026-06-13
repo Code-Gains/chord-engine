@@ -31,7 +31,7 @@ int main() {
 
     core._systems.push_back(std::make_unique<ImGuiManager>(registry, &core));
 
-    auto registryViewer = std::make_unique<RegistryViewer>(registry);
+    auto registryViewer = std::make_unique<RegistryViewer>(registry, &core);
     auto* registryViewerPtr = registryViewer.get();
     core._systems.push_back(std::move(registryViewer));
 

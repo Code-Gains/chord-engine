@@ -2,6 +2,7 @@
 
 #include "Core.h"
 #include "GravityComponents.h"
+#include "RuntimePauseState.h"
 #include "Transform.h"
 
 #include <glm/geometric.hpp>
@@ -40,6 +41,9 @@ GravitySimulationSystem::GravitySimulationSystem(entt::registry& registry, Engin
 void GravitySimulationSystem::FixedUpdate(float deltaTime)
 {
     if (_core && !_core->IsPlayMode()) {
+        return;
+    }
+    if (Engine::IsGameplayPaused(_registry)) {
         return;
     }
 

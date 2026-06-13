@@ -7,6 +7,7 @@
 #include "Transform.h"
 #include "MeshComponent.h"
 #include "GravityComponents.h"
+#include "HierarchyComponent.h"
 
 #include <string>
 
@@ -74,6 +75,7 @@ EntityViewer::EntityViewer(entt::registry &registry, RegistryViewer* registryVie
 {
     _componentUis.push_back(std::make_unique<NameComponentUi>());
     _componentUis.push_back(std::make_unique<TransformComponentUi>());
+    _componentUis.push_back(std::make_unique<HierarchyComponentUi>());
     _componentUis.push_back(std::make_unique<SunlightComponentUI>());
     _componentUis.push_back(std::make_unique<CameraComponentUi>());
     _componentUis.push_back(std::make_unique<MeshComponentUi>());
@@ -103,6 +105,18 @@ EntityViewer::EntityViewer(entt::registry &registry, RegistryViewer* registryVie
         },
         [](entt::registry& registry, entt::entity entity) {
             registry.emplace<Transform>(entity);
+        }
+    );
+
+    AddComponentMenuItem(
+        "Node",
+        [](entt::registry& registry, entt::entity entity) {
+            return registry.all_of<Transform>(entity) &&
+                   !registry.all_of<HierarchyComponent>(entity);
+        },
+        [](entt::registry& registry, entt::entity entity) {
+            auto& hierarchy = registry.emplace<HierarchyComponent>(entity);
+            hierarchy.localTransform = registry.get<Transform>(entity);
         }
     );
 

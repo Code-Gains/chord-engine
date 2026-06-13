@@ -102,6 +102,7 @@ struct InstanceData {
     glm::quat rotation; // vec4
     glm::vec3 scale;
     float pad1;
+    glm::vec4 baseColorFactor{ 1.0f };
 };
 
 struct GPUSceneData {
@@ -289,6 +290,7 @@ private:
     void InitImgui();
     void InitInstancedMeshPipeline();
     void InitMeshPipeline();
+    void InitEffectMeshPipeline();
     void InitLinePipeline();
     void InitShadowResources();
     void InitShadowPipeline();
@@ -399,6 +401,10 @@ private:
 
     void DrawBackground(VkCommandBuffer cmd);
     void DrawGeometry(VkCommandBuffer cmd);
+    void DrawEffectMeshes(
+        VkCommandBuffer cmd,
+        const glm::mat4& viewProjection,
+        const glm::vec3& cameraPosition);
     void DrawLines(VkCommandBuffer cmd, const glm::mat4& viewProjection);
     void DrawShadowMap(VkCommandBuffer cmd);
     void DrawSelectedOutline(VkCommandBuffer cmd);
@@ -425,12 +431,14 @@ private:
     // ------------------------------------------------------------------------
     VkPipelineLayout _instancedMeshPipelineLayout;
     VkPipelineLayout _meshPipelineLayout;
+    VkPipelineLayout _effectMeshPipelineLayout = VK_NULL_HANDLE;
     VkPipelineLayout _linePipelineLayout;
     VkPipelineLayout _shadowPipelineLayout = VK_NULL_HANDLE;
     VkPipelineLayout _selectionMaskPipelineLayout = VK_NULL_HANDLE;
     VkPipelineLayout _selectionOutlinePipelineLayout = VK_NULL_HANDLE;
     VkPipeline _instancedMeshPipeline;
     VkPipeline _meshPipeline;
+    VkPipeline _effectMeshPipeline = VK_NULL_HANDLE;
     VkPipeline _linePipeline;
     VkPipeline _shadowPipeline = VK_NULL_HANDLE;
     VkPipeline _selectionMaskPipeline = VK_NULL_HANDLE;

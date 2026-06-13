@@ -3,6 +3,7 @@
 #include "Camera.h"
 #include "Core.h"
 #include "GravityComponents.h"
+#include "HierarchyComponent.h"
 #include "Log.h"
 #include "MeshComponent.h"
 #include "NameComponent.h"
@@ -12,6 +13,7 @@
 #include <exception>
 #include <fstream>
 #include <glm/trigonometric.hpp>
+#include <unordered_map>
 
 namespace Engine {
 namespace {
@@ -72,6 +74,11 @@ glm::quat QuatFromJson(const nlohmann::json& value)
         value.at(2).get<float>(),
         value.at(3).get<float>()
     };
+}
+
+entt::entity EntityFromSerializedId(uint64_t id)
+{
+    return static_cast<entt::entity>(id);
 }
 
 nlohmann::json WorldToJson(const Serialization::SerializedWorld& world)
@@ -390,6 +397,20 @@ std::optional<entt::entity> WorldSerializer::InstantiatePrefab(
     return ApplyEntity(core, entity);
 }
 
+std::optional<Serialization::SerializedEntity> WorldSerializer::SerializeEntity(
+    Core& core,
+    entt::entity entity) const
+{
+    return CaptureEntity(core, entity);
+}
+
+entt::entity WorldSerializer::InstantiateEntity(
+    Core& core,
+    const Serialization::SerializedEntity& entity) const
+{
+    return ApplyEntity(core, entity);
+}
+
 nlohmann::json WorldSerializer::SaveWorldToJson(Core& core) const
 {
     return WorldToJson(CaptureWorld(core));
@@ -459,7 +480,7 @@ void WorldSerializer::ApplyWorld(Core& core, const Serialization::SerializedWorl
     }
 
     for (const auto& serializedEntity : world.entities) {
-        ApplyEntity(core, serializedEntity);
+        ApplyEntity(core, serializedEntity, true);
     }
 
     ApplyEditorState(core, world.editor);
@@ -487,10 +508,21 @@ std::optional<Serialization::SerializedEntity> WorldSerializer::CaptureEntity(
 
 entt::entity WorldSerializer::ApplyEntity(
     Core& core,
-    const Serialization::SerializedEntity& serializedEntity) const
+    const Serialization::SerializedEntity& serializedEntity,
+    bool preserveSerializedId) const
 {
     auto& registry = core.GetRegistry();
-    auto entity = registry.create();
+    entt::entity entity = entt::null;
+
+    if (preserveSerializedId && serializedEntity.id != 0) {
+        const entt::entity preferredEntity = EntityFromSerializedId(serializedEntity.id);
+        entity = registry.valid(preferredEntity)
+            ? registry.create()
+            : registry.create(preferredEntity);
+    }
+    else {
+        entity = registry.create();
+    }
 
     for (const auto& component : serializedEntity.components) {
         _componentSerializers.LoadComponent(core, registry, entity, component);
@@ -519,6 +551,30 @@ void WorldSerializer::RegisterDefaultComponentSerializers()
         }
     );
 
+    _componentSerializers.Register<HierarchyComponent>(
+        "HierarchyComponent",
+        [](Core&, const HierarchyComponent& hierarchy) {
+            const bool hasParent = hierarchy.parent != entt::null;
+            return nlohmann::json {
+                {"parent", hasParent ? static_cast<uint64_t>(entt::to_integral(hierarchy.parent)) : uint64_t{ 0 }},
+                {"inheritTransform", hierarchy.inheritTransform},
+                {"localPosition", Vec3ToJson(hierarchy.localTransform.position)},
+                {"localRotation", QuatToJson(hierarchy.localTransform.rotation)},
+                {"localScale", Vec3ToJson(hierarchy.localTransform.scale)}
+            };
+        },
+        [](Core&, const nlohmann::json& data) {
+            HierarchyComponent hierarchy;
+            const uint64_t parentId = data.value("parent", uint64_t{ 0 });
+            hierarchy.parent = parentId == 0 ? entt::null : EntityFromSerializedId(parentId);
+            hierarchy.inheritTransform = data.value("inheritTransform", true);
+            hierarchy.localTransform.position = Vec3FromJson(data.at("localPosition"));
+            hierarchy.localTransform.rotation = QuatFromJson(data.at("localRotation"));
+            hierarchy.localTransform.scale = Vec3FromJson(data.at("localScale"));
+            return hierarchy;
+        }
+    );
+
     _componentSerializers.Register<NameComponent>(
         "NameComponent",
         [](Core&, const NameComponent& name) {
@@ -544,7 +600,8 @@ void WorldSerializer::RegisterDefaultComponentSerializers()
 
             return nlohmann::json {
                 {"path", reference.path},
-                {"meshIndex", reference.meshIndex}
+                {"meshIndex", reference.meshIndex},
+                {"baseColorFactor", Vec4ToJson(meshComponent.baseColorFactor)}
             };
         },
         [](Core& core, const nlohmann::json& data) {
@@ -553,6 +610,10 @@ void WorldSerializer::RegisterDefaultComponentSerializers()
                 data.at("path").get<std::string>(),
                 data.at("meshIndex").get<uint32_t>()
             };
+            meshComponent.baseColorFactor =
+                data.contains("baseColorFactor")
+                    ? Vec4FromJson(data.at("baseColorFactor"))
+                    : glm::vec4{ 1.0f };
 
             auto meshes = core.LoadGltfMeshes(&core, meshComponent.source.path);
             if (!meshes.has_value()) {
@@ -578,7 +639,6 @@ void WorldSerializer::RegisterDefaultComponentSerializers()
         [](Core&, const Camera& camera) {
             return nlohmann::json {
                 {"fov", camera.fov},
-                {"aspectRatio", camera.aspectRatio},
                 {"nearPlane", camera.nearPlane},
                 {"farPlane", camera.farPlane},
                 {"clearColor", Vec4ToJson(camera.clearColor)},
@@ -588,7 +648,6 @@ void WorldSerializer::RegisterDefaultComponentSerializers()
         [](Core&, const nlohmann::json& data) {
             Camera camera;
             camera.fov = data.at("fov").get<float>();
-            camera.aspectRatio = data.at("aspectRatio").get<float>();
             camera.nearPlane = data.at("nearPlane").get<float>();
             camera.farPlane = data.at("farPlane").get<float>();
             camera.clearColor = Vec4FromJson(data.at("clearColor"));

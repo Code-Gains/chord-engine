@@ -13,6 +13,8 @@
 #include "Camera.h"
 #include "MeshComponent.h"
 #include "GravityComponents.h"
+#include "HierarchyComponent.h"
+#include "HierarchySystem.h"
 
 class ViewerComponentUi
 {
@@ -87,6 +89,9 @@ public:
         if (DrawComponentHeader("Transform", "TransformComponent"))
         {
             ImGui::TextUnformatted("Required");
+            if (registry.all_of<HierarchyComponent>(entity)) {
+                ImGui::TextDisabled("World transform. Edit local transform in Node.");
+            }
 
             ImGui::DragFloat3("Position", &transform->position.x, 0.1f);
 
@@ -123,6 +128,64 @@ public:
             ImGui::ColorEdit3("Color", &sunlight->color.x);
 
             ImGui::DragFloat("Ambient", &sunlight->ambient, 0.01f, 0.0f, 1.0f);
+        }
+    }
+};
+
+class HierarchyComponentUi : public ViewerComponentUi {
+public:
+    glm::vec3 localRotationEulerDegrees{0.0f};
+    int parentIdInput = -1;
+    entt::entity editedEntity{ entt::null };
+
+    void Draw(entt::registry& registry, entt::entity entity) override {
+        auto* hierarchy = registry.try_get<HierarchyComponent>(entity);
+        if (!hierarchy)
+            return;
+
+        if (DrawRemovableComponentHeader<HierarchyComponent>(registry, entity, "Node", "HierarchyComponent"))
+        {
+            const int parentId = hierarchy->parent == entt::null
+                ? -1
+                : static_cast<int>(entt::to_integral(hierarchy->parent));
+
+            ImGui::Text("Parent: %d", parentId);
+            ImGui::Checkbox("Inherit Transform", &hierarchy->inheritTransform);
+
+            if (editedEntity != entity) {
+                editedEntity = entity;
+                parentIdInput = parentId;
+            }
+
+            ImGui::InputInt("Parent Entity Id", &parentIdInput);
+
+            if (ImGui::Button("Set Parent##HierarchyParent")) {
+                const entt::entity parent = parentIdInput < 0
+                    ? entt::null
+                    : static_cast<entt::entity>(parentIdInput);
+                Engine::SetHierarchyParent(registry, entity, parent, true);
+            }
+
+            ImGui::SameLine();
+
+            if (ImGui::Button("Clear Parent##HierarchyParent")) {
+                hierarchy->localTransform = registry.get<Transform>(entity);
+                hierarchy->parent = entt::null;
+                parentIdInput = -1;
+            }
+
+            ImGui::SeparatorText("Local Transform");
+
+            ImGui::DragFloat3("Local Position", &hierarchy->localTransform.position.x, 0.1f);
+
+            if (ImGui::DragFloat3("Local Rotation", &localRotationEulerDegrees.x, 0.1f))
+            {
+                glm::vec3 radians = glm::radians(localRotationEulerDegrees);
+                hierarchy->localTransform.rotation =
+                    glm::normalize(glm::quat(radians));
+            }
+
+            ImGui::DragFloat3("Local Scale", &hierarchy->localTransform.scale.x, 0.1f);
         }
     }
 };
@@ -180,6 +243,7 @@ public:
 
             ImGui::Text("Path: %s", source.path.c_str());
             ImGui::Text("Mesh Index: %u", source.meshIndex);
+            ImGui::ColorEdit4("Base Color Factor", &mesh->baseColorFactor.x);
         }
     }
 };

@@ -140,6 +140,15 @@ struct SelectionOutlinePushConstants {
     float pad0 = 0.0f;
 };
 
+struct EffectMeshPushConstants {
+    glm::mat4 viewProjection;
+    glm::mat4 model;
+    glm::vec4 color;
+    glm::vec4 params;
+    glm::vec4 cameraPosition;
+    VkDeviceAddress vertexBuffer;
+};
+
 //< vbuf_types
 
 //> node_types

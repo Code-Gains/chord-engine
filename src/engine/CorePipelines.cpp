@@ -232,6 +232,51 @@ void Core::InitInstancedMeshPipeline() {
     });
 }
 
+void Core::InitEffectMeshPipeline()
+{
+    VkShaderModule fragShader;
+    if (!LoadEngineShaderModule("shaders/effect_mesh.frag.spv", &fragShader)) {
+        ENGINE_LOG_ERROR("Error when building the effect mesh fragment shader module");
+    }
+
+    VkShaderModule vertexShader;
+    if (!LoadEngineShaderModule("shaders/effect_mesh.vert.spv", &vertexShader)) {
+        ENGINE_LOG_ERROR("Error when building the effect mesh vertex shader module");
+    }
+
+    VkPushConstantRange bufferRange{};
+    bufferRange.offset = 0;
+    bufferRange.size = sizeof(EffectMeshPushConstants);
+    bufferRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+
+    VkPipelineLayoutCreateInfo pipelineLayoutInfo = vkinit::pipeline_layout_create_info();
+    pipelineLayoutInfo.pPushConstantRanges = &bufferRange;
+    pipelineLayoutInfo.pushConstantRangeCount = 1;
+    VK_CHECK(vkCreatePipelineLayout(_device, &pipelineLayoutInfo, nullptr, &_effectMeshPipelineLayout));
+
+    PipelineBuilder pipelineBuilder;
+    pipelineBuilder._pipelineLayout = _effectMeshPipelineLayout;
+    pipelineBuilder.set_shaders(vertexShader, fragShader);
+    pipelineBuilder.set_input_topology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
+    pipelineBuilder.set_polygon_mode(VK_POLYGON_MODE_FILL);
+    pipelineBuilder.set_cull_mode(VK_CULL_MODE_NONE, VK_FRONT_FACE_CLOCKWISE);
+    pipelineBuilder.set_multisampling(_msaaSamples);
+    pipelineBuilder.enable_blending_alphablend();
+    pipelineBuilder.enable_depthtest(false, VK_COMPARE_OP_GREATER_OR_EQUAL);
+    pipelineBuilder.set_color_attachment_format(_drawImage.imageFormat);
+    pipelineBuilder.set_depth_format(_depthImage.imageFormat);
+
+    _effectMeshPipeline = pipelineBuilder.build_pipeline(_device);
+
+    vkDestroyShaderModule(_device, fragShader, nullptr);
+    vkDestroyShaderModule(_device, vertexShader, nullptr);
+
+    _mainDeletionQueue.push_function([&]() {
+        vkDestroyPipelineLayout(_device, _effectMeshPipelineLayout, nullptr);
+        vkDestroyPipeline(_device, _effectMeshPipeline, nullptr);
+    });
+}
+
 void Core::InitLinePipeline()
 {
     VkShaderModule fragShader;

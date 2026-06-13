@@ -33,6 +33,7 @@ struct InstanceData {
     vec4 rotation;   // quaternion xyzw
     vec3 scale;
     float pad1;
+    vec4 baseColorFactor;
 };
 
 // struct InstanceData {
@@ -97,5 +98,5 @@ void main() {
     outNormal = normalize(transpose(inverse(model3x3)) * vertex.normal);
     outUV = vec2(vertex.uv_x, vertex.uv_y);
     outTangent = vec4(normalize(model3x3 * vertex.tangent.xyz), vertex.tangent.w);
-    outBaseColorFactor = PushConstants.baseColorFactor;
+    outBaseColorFactor = PushConstants.baseColorFactor * inst.baseColorFactor;
 }

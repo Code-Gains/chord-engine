@@ -13,6 +13,7 @@ using Clock = std::chrono::high_resolution_clock;
 #include "NameComponent.h"
 #include "WorldSerializer.h"
 #include "EditorSelection.h"
+#include "HierarchySystem.h"
 
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
@@ -240,6 +241,7 @@ void Core::InitPipelines()
     InitPrefilterPipeline();
     InitMeshPipeline();
     InitInstancedMeshPipeline();
+    InitEffectMeshPipeline();
     InitShadowPipeline();
     InitLinePipeline();
     InitSelectionOutlinePipeline();
@@ -270,6 +272,7 @@ void Core::Run() {
             for (auto& system : _systems) {
                 system->FixedUpdate(fixedDelta);
             }
+            ResolveHierarchyTransforms(_registry);
             fixedUpdateAccumulator -= fixedDelta;
         }
 
@@ -301,6 +304,7 @@ void Core::Run() {
         for (auto& system : _systems) {
             system->Update(_deltaTime);
         }
+        ResolveHierarchyTransforms(_registry);
 
         // imgui new frame
         ImGui_ImplVulkan_NewFrame();
@@ -693,7 +697,10 @@ void Core::DrawGeometry(VkCommandBuffer cmd)
     auto& renderCamera = _registry.get<Camera>(cameraEntity);
     auto& renderCameraTransform = _registry.get<Transform>(cameraEntity);
     glm::mat4 viewMatrix = renderCamera.GetViewMatrix(renderCameraTransform);
-    glm::mat4 projectionMatrix = renderCamera.GetProjectionMatrix();
+    const float renderAspectRatio =
+        static_cast<float>(glm::max(_drawExtent.width, 1u)) /
+        static_cast<float>(glm::max(_drawExtent.height, 1u));
+    glm::mat4 projectionMatrix = renderCamera.GetProjectionMatrix(renderAspectRatio);
 
     //allocate a new uniform buffer for the scene data
     AllocatedBuffer gpuSceneDataBuffer = CreateBuffer(sizeof(GPUSceneData), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU);
@@ -823,7 +830,7 @@ void Core::DrawGeometry(VkCommandBuffer cmd)
         }
 
         // exclude entities that are not meant for batch rendering
-        auto registryView = _registry.view<MeshComponent, Transform>(entt::exclude<SingleRenderTag>);
+        auto registryView = _registry.view<MeshComponent, Transform>(entt::exclude<SingleRenderTag, EffectMeshComponent>);
 
         for (auto entity : registryView) {
             auto& meshComponent = registryView.get<MeshComponent>(entity);
@@ -836,6 +843,7 @@ void Core::DrawGeometry(VkCommandBuffer cmd)
             instance.position = trans.position;
             instance.rotation = trans.rotation;
             instance.scale = trans.scale;
+            instance.baseColorFactor = meshComponent.baseColorFactor;
 
             auto& batch = _batches[meshComponent.mesh.get()];
             if (batch.capacity() == 0) {
@@ -978,7 +986,7 @@ void Core::DrawGeometry(VkCommandBuffer cmd)
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, _meshPipelineLayout, 2, 1, &_environmentDescriptorSet, 0, nullptr);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, _meshPipelineLayout, 3, 1, &_shadowDescriptorSet, 0, nullptr);
     // ECS Singles rendering
-    auto registryViewSingles = _registry.view<MeshComponent, Transform, SingleRenderTag>();
+    auto registryViewSingles = _registry.view<MeshComponent, Transform, SingleRenderTag>(entt::exclude<EffectMeshComponent>);
 
     for (auto entity : registryViewSingles) {
         auto& meshComponent = registryViewSingles.get<MeshComponent>(entity);
@@ -1064,7 +1072,9 @@ void Core::DrawGeometry(VkCommandBuffer cmd)
         push_constants.vertexBuffer = meshAssetPtr->meshBuffers.vertexBufferAddress;
         push_constants.model = model;
         push_constants.viewProjection = projectionMatrix * viewMatrix;
-        push_constants.baseColorFactor = material ? material->baseColorFactor : glm::vec4{ 1.0f };
+        push_constants.baseColorFactor =
+            (material ? material->baseColorFactor : glm::vec4{ 1.0f }) *
+            meshComponent.baseColorFactor;
 
         vkCmdPushConstants(cmd, _meshPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(GPUDrawPushConstants), &push_constants);
 
@@ -1073,9 +1083,97 @@ void Core::DrawGeometry(VkCommandBuffer cmd)
         vkCmdDrawIndexed(cmd, surface.count, 1, surface.startIndex, 0, 0);
     }
 
-    DrawLines(cmd, projectionMatrix * viewMatrix);
+    const glm::mat4 viewProjection = projectionMatrix * viewMatrix;
+    DrawEffectMeshes(cmd, viewProjection, renderCameraTransform.position);
+    DrawLines(cmd, viewProjection);
 
     vkCmdEndRendering(cmd);
+}
+
+void Core::DrawEffectMeshes(
+    VkCommandBuffer cmd,
+    const glm::mat4& viewProjection,
+    const glm::vec3& cameraPosition)
+{
+    if (_effectMeshPipeline == VK_NULL_HANDLE || _effectMeshPipelineLayout == VK_NULL_HANDLE) {
+        return;
+    }
+
+    std::vector<entt::entity> expiredEffects;
+    auto effectView = _registry.view<MeshComponent, Transform, EffectMeshComponent>();
+    if (effectView.begin() == effectView.end()) {
+        return;
+    }
+
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, _effectMeshPipeline);
+
+    for (auto entity : effectView) {
+        auto& meshComponent = effectView.get<MeshComponent>(entity);
+        auto& transformComponent = effectView.get<Transform>(entity);
+        auto& effect = effectView.get<EffectMeshComponent>(entity);
+
+        auto* meshAsset = meshComponent.mesh.get();
+        if (!meshAsset || meshAsset->surfaces.empty()) {
+            continue;
+        }
+
+        transformComponent.position += effect.velocity * _deltaTime;
+        const float angularSpeed = glm::length(effect.angularVelocity);
+        if (angularSpeed > 0.0001f) {
+            transformComponent.rotation =
+                glm::normalize(
+                    glm::angleAxis(angularSpeed * _deltaTime, effect.angularVelocity / angularSpeed) *
+                    transformComponent.rotation);
+        }
+
+        const float lifetime = glm::max(effect.lifetime, 0.0001f);
+        const float normalizedAge = glm::clamp(effect.age / lifetime, 0.0f, 1.0f);
+        const float animatedScale =
+            glm::mix(effect.startScale, effect.endScale, normalizedAge);
+        const float alphaMultiplier = 1.0f - normalizedAge;
+
+        glm::mat4 model =
+            glm::translate(glm::mat4(1.0f), transformComponent.position) *
+            glm::mat4_cast(transformComponent.rotation) *
+            glm::scale(glm::mat4(1.0f), transformComponent.scale * animatedScale);
+
+        EffectMeshPushConstants pushConstants{};
+        pushConstants.viewProjection = viewProjection;
+        pushConstants.model = model;
+        pushConstants.color = effect.color * meshComponent.baseColorFactor;
+        pushConstants.params = glm::vec4(
+            effect.fresnelPower,
+            effect.fresnelIntensity,
+            effect.baseIntensity,
+            alphaMultiplier);
+        pushConstants.cameraPosition = glm::vec4(cameraPosition, 1.0f);
+        pushConstants.vertexBuffer = meshAsset->meshBuffers.vertexBufferAddress;
+
+        vkCmdPushConstants(
+            cmd,
+            _effectMeshPipelineLayout,
+            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+            0,
+            sizeof(pushConstants),
+            &pushConstants);
+
+        vkCmdBindIndexBuffer(cmd, meshAsset->meshBuffers.indexBuffer.buffer, 0, VK_INDEX_TYPE_UINT32);
+
+        for (const auto& surface : meshAsset->surfaces) {
+            vkCmdDrawIndexed(cmd, surface.count, 1, surface.startIndex, 0, 0);
+        }
+
+        effect.age += _deltaTime;
+        if (effect.destroyOnComplete && effect.age >= effect.lifetime) {
+            expiredEffects.push_back(entity);
+        }
+    }
+
+    for (auto entity : expiredEffects) {
+        if (_registry.valid(entity)) {
+            _registry.destroy(entity);
+        }
+    }
 }
 
 glm::mat4 Core::BuildSunLightViewProjection()
@@ -1104,7 +1202,7 @@ glm::mat4 Core::BuildSunLightViewProjection()
     const float radius = glm::max(_shadowOrthoRadius, 1.0f);
     float depthRadius = glm::max(_shadowDepthRadius, radius * 2.0f);
 
-    auto meshView = _registry.view<MeshComponent, Transform>();
+    auto meshView = _registry.view<MeshComponent, Transform>(entt::exclude<EffectMeshComponent>);
     for (auto entity : meshView) {
         const auto& mesh = meshView.get<MeshComponent>(entity);
         if (!mesh.mesh || mesh.mesh->surfaces.empty()) {
@@ -1194,7 +1292,7 @@ void Core::DrawShadowMap(VkCommandBuffer cmd)
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, _shadowPipeline);
 
-    auto meshView = _registry.view<MeshComponent, Transform>();
+    auto meshView = _registry.view<MeshComponent, Transform>(entt::exclude<EffectMeshComponent>);
     for (auto entity : meshView) {
         auto& meshComponent = meshView.get<MeshComponent>(entity);
         auto& transformComponent = meshView.get<Transform>(entity);
@@ -1341,8 +1439,11 @@ void Core::DrawSelectedOutline(VkCommandBuffer cmd)
 
     const auto& renderCamera = _registry.get<Camera>(cameraEntity);
     const auto& renderCameraTransform = _registry.get<Transform>(cameraEntity);
+    const float renderAspectRatio =
+        static_cast<float>(glm::max(_drawExtent.width, 1u)) /
+        static_cast<float>(glm::max(_drawExtent.height, 1u));
     const glm::mat4 viewProjection =
-        renderCamera.GetProjectionMatrix() *
+        renderCamera.GetProjectionMatrix(renderAspectRatio) *
         renderCamera.GetViewMatrix(renderCameraTransform);
 
     VkImageSubresourceRange colorRange =

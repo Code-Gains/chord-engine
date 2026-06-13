@@ -1,5 +1,6 @@
 #include "Core.h"
 #include "stb_image.h"
+#include <fastgltf/tools.hpp>
 #include <imgui_impl_vulkan.h>
 #include <limits>
 
@@ -153,44 +154,35 @@ std::optional<AllocatedImage> Core::LoadGltfImage(fastgltf::Asset &asset, fastgl
             },
 
             [&](fastgltf::sources::BufferView& view) {
-                auto& bufferView = asset.bufferViews[view.bufferViewIndex];
-                auto& buffer = asset.buffers[bufferView.bufferIndex];
+                fastgltf::DefaultBufferDataAdapter bufferData;
+                auto bytes = bufferData(asset, view.bufferViewIndex);
 
-                std::visit(
-                    fastgltf::visitor{
-                        [](auto&) {},
-
-                        [&](fastgltf::sources::Vector& vector) {
-                            unsigned char* data = stbi_load_from_memory(
-                                reinterpret_cast<const stbi_uc*>(vector.bytes.data()) + bufferView.byteOffset,
-                                static_cast<int>(bufferView.byteLength),
-                                &width,
-                                &height,
-                                &channels,
-                                STBI_rgb_alpha
-                            );
-
-                            if (!data) {
-                                std::cout << "Failed to load image from BufferView\n";
-                                return;
-                            }
-
-                            newImage = CreateImage(
-                                data,
-                                VkExtent3D{
-                                    static_cast<uint32_t>(width),
-                                    static_cast<uint32_t>(height),
-                                    1
-                                },
-                                VK_FORMAT_R8G8B8A8_UNORM,
-                                VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT
-                            );
-
-                            stbi_image_free(data);
-                        }
-                    },
-                    buffer.data
+                unsigned char* data = stbi_load_from_memory(
+                    reinterpret_cast<const stbi_uc*>(bytes.data()),
+                    static_cast<int>(bytes.size()),
+                    &width,
+                    &height,
+                    &channels,
+                    STBI_rgb_alpha
                 );
+
+                if (!data) {
+                    std::cout << "Failed to load image from BufferView\n";
+                    return;
+                }
+
+                newImage = CreateImage(
+                    data,
+                    VkExtent3D{
+                        static_cast<uint32_t>(width),
+                        static_cast<uint32_t>(height),
+                        1
+                    },
+                    VK_FORMAT_R8G8B8A8_UNORM,
+                    VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT
+                );
+
+                stbi_image_free(data);
             },
 
             [](auto&) {}
