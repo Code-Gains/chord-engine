@@ -184,8 +184,10 @@ void Core::InitImgui()
 
     // this initializes the core structures of imgui
     ImGui::CreateContext();
-    ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_DockingEnable;
-    ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
+    ImGuiIO& io = ImGui::GetIO();
+    io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+    io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
+    io.ConfigViewportsNoDecoration = false;
     ApplyEditorImGuiTheme();
     // this initializes imgui for SDL
     ImGui_ImplGlfw_InitForVulkan(_window->GetNativeHandle(), true);

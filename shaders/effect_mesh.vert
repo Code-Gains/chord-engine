@@ -6,6 +6,9 @@ layout(location = 1) out vec3 outNormal;
 layout(location = 2) out vec4 outColor;
 layout(location = 3) out vec4 outParams;
 layout(location = 4) out vec3 outCameraPosition;
+layout(location = 5) out vec4 outCorruptionColor;
+layout(location = 6) out vec4 outCorruptionParams;
+layout(location = 7) out float outEffectAge;
 
 struct Vertex {
     vec3 position;
@@ -25,6 +28,8 @@ layout(push_constant) uniform constants
     mat4 model;
     vec4 color;
     vec4 params;
+    vec4 corruptionColor;
+    vec4 corruptionParams;
     vec4 cameraPosition;
     VertexBuffer vertexBuffer;
 } PushConstants;
@@ -41,4 +46,7 @@ void main()
     outColor = PushConstants.color;
     outParams = PushConstants.params;
     outCameraPosition = PushConstants.cameraPosition.xyz;
+    outCorruptionColor = PushConstants.corruptionColor;
+    outCorruptionParams = PushConstants.corruptionParams;
+    outEffectAge = PushConstants.cameraPosition.w;
 }

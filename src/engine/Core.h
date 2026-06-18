@@ -484,6 +484,7 @@ private:
     // ECS / systems / update state
     // ------------------------------------------------------------------------
     entt::registry _registry;
+    AudioSystem _audioSystem;
     float _deltaTime = 0.0f;
 
     // ------------------------------------------------------------------------
@@ -538,6 +539,11 @@ private:
     void GenerateCubemapMipmaps(VkCommandBuffer cmd, VkImage image, uint32_t width, uint32_t height, uint32_t mipLevels);
     void GeneratePrefilteredCubemap();
     void GenerateIrradianceCubemap();
+    void ExportIblDebugPngs();
+    bool ExportCubemapMipAtlasPng(
+        const CubemapAsset& cubemap,
+        uint32_t mipLevel,
+        const std::filesystem::path& outputPath);
 
     void GenerateTangents(std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices, uint32_t startIndex, uint32_t indexCount);
 
@@ -583,6 +589,12 @@ public:
     void ClearCurrentWorldPath();
     void RegisterComponentSerializers(std::function<void(ComponentSerializerRegistry&)> setup);
     WorldSerializer CreateWorldSerializer() const;
+
+    std::shared_ptr<MeshAsset> CreateRuntimeMesh(
+        std::string name,
+        std::span<uint32_t> indices,
+        std::span<Vertex> vertices
+    );
 
     // ------------------------------------------------------------------------
     // Shared thread pool access

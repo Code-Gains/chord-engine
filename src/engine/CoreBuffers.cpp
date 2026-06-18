@@ -1,5 +1,7 @@
 #include "Core.h"
 
+#include <limits>
+
 namespace Engine {
 AllocatedBuffer Core::CreateBuffer(size_t allocSize, VkBufferUsageFlags usage, VmaMemoryUsage memoryUsage)
 {
@@ -85,5 +87,46 @@ GPUMeshBuffers Core::UploadMesh(std::span<uint32_t> indices, std::span<Vertex> v
     DestroyBuffer(staging);
 
     return newSurface;
+}
+
+std::shared_ptr<MeshAsset> Core::CreateRuntimeMesh(
+    std::string name,
+    std::span<uint32_t> indices,
+    std::span<Vertex> vertices)
+{
+    if (indices.empty() || vertices.empty()) {
+        return {};
+    }
+
+    auto mesh = std::make_shared<MeshAsset>();
+    mesh->name = std::move(name);
+    mesh->surfaces.push_back(GeoSurface {
+        0,
+        static_cast<uint32_t>(indices.size()),
+        nullptr
+    });
+
+    glm::vec3 minPosition(std::numeric_limits<float>::max());
+    glm::vec3 maxPosition(std::numeric_limits<float>::lowest());
+    for (const auto& vertex : vertices) {
+        minPosition = glm::min(minPosition, vertex.position);
+        maxPosition = glm::max(maxPosition, vertex.position);
+    }
+
+    mesh->boundsCenter = (minPosition + maxPosition) * 0.5f;
+    mesh->boundsRadius = glm::max(
+        glm::length(maxPosition - mesh->boundsCenter),
+        0.01f);
+
+    mesh->meshBuffers = UploadMesh(indices, vertices);
+
+    auto vertexBuffer = mesh->meshBuffers.vertexBuffer;
+    auto indexBuffer = mesh->meshBuffers.indexBuffer;
+    _mainDeletionQueue.push_function([this, vertexBuffer, indexBuffer]() {
+        DestroyBuffer(vertexBuffer);
+        DestroyBuffer(indexBuffer);
+    });
+
+    return mesh;
 }
 } // end of namespace engine

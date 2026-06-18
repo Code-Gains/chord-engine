@@ -19,6 +19,7 @@ using Clock = std::chrono::high_resolution_clock;
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_vulkan.h>
 
+#include <filesystem>
 #include <limits>
 
 #define STB_IMAGE_WRITE_IMPLEMENTATION
@@ -40,6 +41,41 @@ using Clock = std::chrono::high_resolution_clock;
 #include <glm/gtc/matrix_transform.hpp>
 
 namespace Engine {
+namespace {
+
+float Float16ToFloat32(uint16_t h16)
+{
+    const uint32_t sign = (h16 >> 15) & 0x1;
+    const uint32_t exponent = (h16 >> 10) & 0x1F;
+    const uint32_t mantissa = h16 & 0x3FF;
+
+    float value;
+    if (exponent == 0) {
+        value = std::ldexp(static_cast<float>(mantissa), -24);
+    }
+    else if (exponent == 31) {
+        value = 0.0f;
+    }
+    else {
+        value = std::ldexp(static_cast<float>(mantissa | 0x400), static_cast<int>(exponent) - 25);
+    }
+
+    return sign ? -value : value;
+}
+
+uint8_t LinearFloatToPngByte(float value)
+{
+    if (!std::isfinite(value)) {
+        value = 0.0f;
+    }
+
+    value = std::clamp(value, 0.0f, 1.0f);
+    value = std::pow(value, 1.0f / 2.2f);
+    return static_cast<uint8_t>(value * 255.0f + 0.5f);
+}
+
+} // namespace
+
 #ifndef NDEBUG
     constexpr bool gUseValidationLayers = true; // TODO move to global settings later
 #else
@@ -210,11 +246,18 @@ void Core::Init()
     InitShadowResources();
     InitPipelines();
     InitDefaultData();
+    if (_audioSystem.Init()) {
+        ENGINE_LOG_INFO("Audio system initialized.");
+    }
+    else {
+        ENGINE_LOG_ERROR("Audio system failed to initialize.");
+    }
     _window->Show();
 
     // ImGui Window Manager context
     auto& windowRegistry = _registry.ctx().emplace<ImGuiWindowRegistry>();
     windowRegistry.RegisterWindow("Texture Debugger", false);
+    windowRegistry.RegisterWindow("Audio Debugger", false);
 
     // Core systems
     _systems.push_back(std::make_unique<EcsDebugger>(_registry));
@@ -304,6 +347,7 @@ void Core::Run() {
         for (auto& system : _systems) {
             system->Update(_deltaTime);
         }
+        _audioSystem.Update();
         ResolveHierarchyTransforms(_registry);
 
         // imgui new frame
@@ -337,6 +381,13 @@ void Core::Run() {
                 }
 
                 ImGui::Separator();
+                ImGui::TextUnformatted("IBL Maps");
+                if (ImGui::Button("Export irradiance/prefilter PNGs")) {
+                    ExportIblDebugPngs();
+                }
+                ImGui::TextDisabled("Writes six-face atlases to ibl_exports/");
+
+                ImGui::Separator();
 
                 for (size_t i = 0; i < _loadedImages.size(); i++)
                 {
@@ -366,6 +417,32 @@ void Core::Run() {
             ImGui::End();
 
             windowRegistry.SetWindowOpen("Texture Debugger", open);
+        }
+
+        bool audioOpen = windowRegistry.IsWindowOpen("Audio Debugger");
+        if (audioOpen)
+        {
+            if (ImGui::Begin("Audio Debugger", &audioOpen))
+            {
+                ImGui::Text(
+                    "OpenAL: %s",
+                    _audioSystem.IsInitialized() ? "initialized" : "unavailable");
+
+                if (!_audioSystem.IsInitialized()) {
+                    ImGui::BeginDisabled();
+                }
+
+                if (ImGui::Button("Play test tone")) {
+                    _audioSystem.PlayTestTone();
+                }
+
+                if (!_audioSystem.IsInitialized()) {
+                    ImGui::EndDisabled();
+                }
+            }
+
+            ImGui::End();
+            windowRegistry.SetWindowOpen("Audio Debugger", audioOpen);
         }
 
         ImGui::Render();
@@ -1146,7 +1223,13 @@ void Core::DrawEffectMeshes(
             effect.fresnelIntensity,
             effect.baseIntensity,
             alphaMultiplier);
-        pushConstants.cameraPosition = glm::vec4(cameraPosition, 1.0f);
+        pushConstants.corruptionColor = effect.corruptionColor;
+        pushConstants.corruptionParams = glm::vec4(
+            effect.corruptionScale,
+            effect.corruptionSoftness,
+            effect.corruptionIntensity,
+            effect.corruptionAmount);
+        pushConstants.cameraPosition = glm::vec4(cameraPosition, effect.age);
         pushConstants.vertexBuffer = meshAsset->meshBuffers.vertexBufferAddress;
 
         vkCmdPushConstants(
@@ -1592,6 +1675,141 @@ void Core::DrawImGui(VkCommandBuffer cmd, VkImageView targetImageView)
     vkCmdEndRendering(cmd);
 }
 
+void Core::ExportIblDebugPngs()
+{
+    const std::filesystem::path outputDir = "ibl_exports";
+    std::filesystem::create_directories(outputDir);
+
+    ExportCubemapMipAtlasPng(
+        _irradianceCubemap,
+        0,
+        outputDir / "irradiance_atlas.png");
+
+    for (uint32_t mip = 0; mip < _prefilteredCubemap.image.mipLevels; ++mip) {
+        ExportCubemapMipAtlasPng(
+            _prefilteredCubemap,
+            mip,
+            outputDir / ("prefilter_mip" + std::to_string(mip) + "_atlas.png"));
+    }
+}
+
+bool Core::ExportCubemapMipAtlasPng(
+    const CubemapAsset& cubemap,
+    uint32_t mipLevel,
+    const std::filesystem::path& outputPath)
+{
+    const auto& image = cubemap.image;
+    if (image.image == VK_NULL_HANDLE ||
+        image.imageFormat != VK_FORMAT_R16G16B16A16_SFLOAT ||
+        mipLevel >= image.mipLevels) {
+        return false;
+    }
+
+    const uint32_t faceSize = std::max(1u, image.imageExtent.width >> mipLevel);
+    constexpr uint32_t faceCount = 6;
+    constexpr uint32_t channels = 4;
+    constexpr uint32_t bytesPerChannel = 2;
+    const VkDeviceSize faceBytes =
+        static_cast<VkDeviceSize>(faceSize) *
+        static_cast<VkDeviceSize>(faceSize) *
+        channels *
+        bytesPerChannel;
+    const VkDeviceSize bufferSize = faceBytes * faceCount;
+
+    AllocatedBuffer stagingBuffer = CreateBuffer(
+        bufferSize,
+        VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+        VMA_MEMORY_USAGE_CPU_ONLY);
+
+    ImmediateSubmit([&](VkCommandBuffer cmd) {
+        VkImageSubresourceRange range{};
+        range.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        range.baseMipLevel = mipLevel;
+        range.levelCount = 1;
+        range.baseArrayLayer = 0;
+        range.layerCount = faceCount;
+
+        vkutil::transition_image(
+            cmd,
+            image.image,
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+            range);
+
+        std::array<VkBufferImageCopy, faceCount> copyRegions{};
+        for (uint32_t face = 0; face < faceCount; ++face) {
+            auto& region = copyRegions[face];
+            region.bufferOffset = faceBytes * face;
+            region.bufferRowLength = 0;
+            region.bufferImageHeight = 0;
+            region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            region.imageSubresource.mipLevel = mipLevel;
+            region.imageSubresource.baseArrayLayer = face;
+            region.imageSubresource.layerCount = 1;
+            region.imageOffset = { 0, 0, 0 };
+            region.imageExtent = { faceSize, faceSize, 1 };
+        }
+
+        vkCmdCopyImageToBuffer(
+            cmd,
+            image.image,
+            VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+            stagingBuffer.buffer,
+            static_cast<uint32_t>(copyRegions.size()),
+            copyRegions.data());
+
+        vkutil::transition_image(
+            cmd,
+            image.image,
+            VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            range);
+    });
+
+    void* mappedData = nullptr;
+    vmaMapMemory(_allocator, stagingBuffer.allocation, &mappedData);
+
+    const auto* src = static_cast<const uint16_t*>(mappedData);
+    const uint32_t atlasWidth = faceSize * faceCount;
+    const uint32_t atlasHeight = faceSize;
+    std::vector<uint8_t> pixels(
+        static_cast<size_t>(atlasWidth) *
+        static_cast<size_t>(atlasHeight) *
+        channels);
+
+    const uint32_t srcFaceTexelCount = faceSize * faceSize;
+    for (uint32_t face = 0; face < faceCount; ++face) {
+        const uint32_t srcFaceOffset = face * srcFaceTexelCount * channels;
+        for (uint32_t y = 0; y < faceSize; ++y) {
+            for (uint32_t x = 0; x < faceSize; ++x) {
+                const uint32_t srcIndex =
+                    srcFaceOffset +
+                    (y * faceSize + x) * channels;
+                const uint32_t dstIndex =
+                    (y * atlasWidth + face * faceSize + x) * channels;
+
+                pixels[dstIndex + 0] = LinearFloatToPngByte(Float16ToFloat32(src[srcIndex + 0]));
+                pixels[dstIndex + 1] = LinearFloatToPngByte(Float16ToFloat32(src[srcIndex + 1]));
+                pixels[dstIndex + 2] = LinearFloatToPngByte(Float16ToFloat32(src[srcIndex + 2]));
+                pixels[dstIndex + 3] = LinearFloatToPngByte(Float16ToFloat32(src[srcIndex + 3]));
+            }
+        }
+    }
+
+    vmaUnmapMemory(_allocator, stagingBuffer.allocation);
+    DestroyBuffer(stagingBuffer);
+
+    std::filesystem::create_directories(outputPath.parent_path());
+    const std::string output = outputPath.generic_string();
+    return stbi_write_png(
+        output.c_str(),
+        static_cast<int>(atlasWidth),
+        static_cast<int>(atlasHeight),
+        static_cast<int>(channels),
+        pixels.data(),
+        static_cast<int>(atlasWidth * channels)) != 0;
+}
+
 void Core::ImmediateSubmit(std::function<void(VkCommandBuffer cmd)> &&function)
 {
     VK_CHECK(vkResetFences(_device, 1, &_immFence));
@@ -1620,6 +1838,8 @@ void Core::ImmediateSubmit(std::function<void(VkCommandBuffer cmd)> &&function)
 void Core::Shutdown() { // todo move things out to deletion queues on creation if possible
     if (!_isInitialized)
         return;
+
+    _audioSystem.Shutdown();
 
     _threadPool.~ThreadPool(); // destroy thread pool
     vkDeviceWaitIdle(_device);

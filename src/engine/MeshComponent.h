@@ -38,6 +38,7 @@ struct MeshComponent {
 
 struct EffectMeshComponent {
     glm::vec4 color{ 1.0f, 0.45f, 0.08f, 0.45f };
+    glm::vec4 corruptionColor{ 1.0f, 1.0f, 1.0f, 0.0f };
     glm::vec3 velocity{ 0.0f };
     glm::vec3 angularVelocity{ 0.0f };
     float lifetime = 0.35f;
@@ -47,6 +48,10 @@ struct EffectMeshComponent {
     float fresnelPower = 2.5f;
     float fresnelIntensity = 2.0f;
     float baseIntensity = 0.2f;
+    float corruptionScale = 8.0f;
+    float corruptionSoftness = 0.04f;
+    float corruptionIntensity = 0.0f;
+    float corruptionAmount = 0.0f;
     bool destroyOnComplete = true;
 };
 

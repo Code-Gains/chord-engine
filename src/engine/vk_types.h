@@ -1,4 +1,4 @@
-﻿// vulkan_guide.h : Include file for standard system include files,
+// vulkan_guide.h : Include file for standard system include files,
 // or project specific include files.
 //> intro
 #pragma once
@@ -145,6 +145,8 @@ struct EffectMeshPushConstants {
     glm::mat4 model;
     glm::vec4 color;
     glm::vec4 params;
+    glm::vec4 corruptionColor;
+    glm::vec4 corruptionParams;
     glm::vec4 cameraPosition;
     VkDeviceAddress vertexBuffer;
 };
