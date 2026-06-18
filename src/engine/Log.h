@@ -1,10 +1,12 @@
 #pragma once
 
-#include <iostream>
-#include <string>
 #include <chrono>
+#include <format>
 #include <iomanip>
+#include <print>
 #include <sstream>
+#include <string>
+#include <string_view>
 
 namespace Engine {
 
@@ -34,19 +36,36 @@ inline std::string GetTimestamp() {
 }
 
 
-inline void Log(LogLevel level, const std::string& message) {
-    std::string prefix;
+inline std::string_view GetLogLevelPrefix(LogLevel level) {
     switch (level) {
-        case LogLevel::Info:  prefix = "[INFO] "; break;
-        case LogLevel::Warn:  prefix = "[WARN] "; break;
-        case LogLevel::Error: prefix = "[ERROR] "; break;
+        case LogLevel::Info: return "[INFO] ";
+        case LogLevel::Warn: return "[WARN] ";
+        case LogLevel::Error: return "[ERROR] ";
     }
 
-    std::cout << GetTimestamp() << " " << prefix << message << std::endl;
+    return "[INFO] ";
 }
 
-#define ENGINE_LOG_INFO(msg) Engine::Log(Engine::LogLevel::Info, msg)
-#define ENGINE_LOG_WARN(msg) Engine::Log(Engine::LogLevel::Warn, msg)
-#define ENGINE_LOG_ERROR(msg) Engine::Log(Engine::LogLevel::Error, msg)
+inline void LogMessage(LogLevel level, std::string_view message) {
+    std::print("{} {}{}\n", GetTimestamp(), GetLogLevelPrefix(level), message);
+}
+
+inline void Log(LogLevel level, std::string_view message) {
+    LogMessage(level, message);
+}
+
+template <typename T>
+inline void Log(LogLevel level, const T& value) {
+    LogMessage(level, std::format("{}", value));
+}
+
+template <typename... Args>
+inline void Log(LogLevel level, std::format_string<Args...> format, Args&&... args) {
+    LogMessage(level, std::format(format, std::forward<Args>(args)...));
+}
+
+#define ENGINE_LOG_INFO(...) Engine::Log(Engine::LogLevel::Info, __VA_ARGS__)
+#define ENGINE_LOG_WARN(...) Engine::Log(Engine::LogLevel::Warn, __VA_ARGS__)
+#define ENGINE_LOG_ERROR(...) Engine::Log(Engine::LogLevel::Error, __VA_ARGS__)
 
 } // namespace Engine
