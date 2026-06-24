@@ -1,7 +1,10 @@
 #pragma once
+#include <string>
 #include <unordered_map>
+#include <vector>
 #include "WindowGLFW.h"
 #include "System.h"
+#include <glm/glm.hpp>
 
 
 struct KeyState {
@@ -13,6 +16,14 @@ struct KeyState {
 struct InputState {
     std::unordered_map<int, KeyState> keys;
     std::unordered_map<int, KeyState> mouseButtons;
+    std::unordered_map<int, KeyState> gamepadButtons;
+    std::vector<float> gamepadAxes;
+    int activeGamepad = -1;
+    std::string activeGamepadName;
+    glm::vec2 leftStick{ 0.0f };
+    glm::vec2 rightStick{ 0.0f };
+    float leftTrigger = 0.0f;
+    float rightTrigger = 0.0f;
     double mouseX = 0.0;
     double mouseY = 0.0;
 
@@ -33,6 +44,7 @@ public:
 
 private:
     void OnScroll(double xOffset, double yOffset);
+    void UpdateGamepad(InputState& inputState);
 
     std::vector<int> _monitoredKeys;
     std::vector<int> _monitoredMouseButtons;

@@ -62,6 +62,22 @@ void EcsDebugger::DrawUi()
 
             ImGui::Text("Mouse Pos: (%.2f, %.2f)", input.mouseX, input.mouseY);
             ImGui::Text("Mouse Delta: (%.2f, %.2f)", input.deltaX, input.deltaY);
+            if (input.activeGamepad != -1)
+            {
+                ImGui::Text("Gamepad %d: %s", input.activeGamepad, input.activeGamepadName.c_str());
+                ImGui::Text(
+                    "Left Stick: (%.2f, %.2f) Right Stick: (%.2f, %.2f)",
+                    input.leftStick.x,
+                    input.leftStick.y,
+                    input.rightStick.x,
+                    input.rightStick.y
+                );
+                ImGui::Text(
+                    "Triggers: L %.2f R %.2f",
+                    input.leftTrigger,
+                    input.rightTrigger
+                );
+            }
 
             for (const auto& [key, state] : input.keys)
             {
@@ -83,6 +99,20 @@ void EcsDebugger::DrawUi()
                 {
                     ImGui::Text(
                         "Mouse %d | H:%d P:%d R:%d",
+                        button,
+                        state.held,
+                        state.pressed,
+                        state.released
+                    );
+                }
+            }
+
+            for (const auto& [button, state] : input.gamepadButtons)
+            {
+                if (state.held || state.pressed || state.released)
+                {
+                    ImGui::Text(
+                        "Gamepad Button %d | H:%d P:%d R:%d",
                         button,
                         state.held,
                         state.pressed,

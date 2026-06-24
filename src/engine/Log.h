@@ -1,12 +1,14 @@
 #pragma once
 
 #include <chrono>
+#include <ctime>
 #include <format>
 #include <iomanip>
-#include <print>
+#include <iostream>
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <utility>
 
 namespace Engine {
 
@@ -47,7 +49,7 @@ inline std::string_view GetLogLevelPrefix(LogLevel level) {
 }
 
 inline void LogMessage(LogLevel level, std::string_view message) {
-    std::print("{} {}{}\n", GetTimestamp(), GetLogLevelPrefix(level), message);
+    std::cout << GetTimestamp() << ' ' << GetLogLevelPrefix(level) << message << '\n';
 }
 
 inline void Log(LogLevel level, std::string_view message) {

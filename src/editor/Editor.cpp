@@ -18,7 +18,7 @@ int main() {
     core.Init();
 
     std::vector<std::shared_ptr<MeshAsset>> meshes;
-    meshes = core.LoadGltfMeshes(&core, "assets/DamagedHelmet.gltf").value();
+    //meshes = core.LoadGltfMeshes(&core, "assets/DamagedHelmet.gltf").value();
     auto& registry = core.GetRegistry();
 
     auto editorCameraEntity = registry.create();
@@ -39,7 +39,7 @@ int main() {
     core._systems.push_back(std::make_unique<AssetViewer>(registry, &core, registryViewerPtr));
 
     auto meshEntity = registry.create();
-    registry.emplace<MeshComponent>(meshEntity, meshes[0]);
+    //registry.emplace<MeshComponent>(meshEntity, meshes[0]);
     auto transform = Transform();
     transform.position = glm::vec3 {0.0f, 0.0f, 0.0f};
     //transform.scale = glm::vec3 {10.0f, 10.0f, 10.0f};
