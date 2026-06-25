@@ -10,10 +10,7 @@ class Core;
 }
 
 class ImGuiManager : public System {
-    void Update(float deltaTime) override {};
-    void FixedUpdate(float deltaTime) override {};
     virtual void DrawUi() override;
-    virtual void Draw() override {};
 
 public:
     ImGuiManager(entt::registry& registry);
@@ -29,12 +26,15 @@ private:
 
     void EnsureDefaultWorldPath();
     void SetWorldPathBuffer(const std::filesystem::path& path);
+    void DrawPlayControls();
     void DrawSceneMenuStatus();
     void DrawWorldFileDialog();
     void RequestWorldFileDialog(WorldFileDialogMode mode);
+    void NewWorld();
     void SaveCurrentWorldOrOpenDialog();
     bool SaveWorldToPath(const std::filesystem::path& worldPath);
     void ResetEditorWindowPositions();
+    void ToggleEditorWindows();
 
     Engine::Core* _core = nullptr;
     std::array<char, 512> _worldPathBuffer {};

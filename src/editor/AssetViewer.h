@@ -16,9 +16,7 @@ public:
     AssetViewer(entt::registry& registry, Engine::Core* core, RegistryViewer* registryViewerPtr);
 
     void Update(float deltaTime) override;
-    void FixedUpdate(float deltaTime) override {};
     void DrawUi() override;
-    void Draw() override {};
 
 private:
     enum class AssetKind {

@@ -135,7 +135,6 @@ public:
 class HierarchyComponentUi : public ViewerComponentUi {
 public:
     glm::vec3 localRotationEulerDegrees{0.0f};
-    int parentIdInput = -1;
     entt::entity editedEntity{ entt::null };
 
     void Draw(entt::registry& registry, entt::entity entity) override {
@@ -143,38 +142,37 @@ public:
         if (!hierarchy)
             return;
 
-        if (DrawRemovableComponentHeader<HierarchyComponent>(registry, entity, "Node", "HierarchyComponent"))
+        if (DrawRemovableComponentHeader<HierarchyComponent>(registry, entity, "Hierarchy", "HierarchyComponent"))
         {
             const int parentId = hierarchy->parent == entt::null
                 ? -1
                 : static_cast<int>(entt::to_integral(hierarchy->parent));
 
             ImGui::Text("Parent: %d", parentId);
-            ImGui::Checkbox("Inherit Transform", &hierarchy->inheritTransform);
+            ImGui::TextDisabled(
+                hierarchy->inheritTransform
+                    ? "Mode: Attached"
+                    : "Mode: Organizational");
 
             if (editedEntity != entity) {
                 editedEntity = entity;
-                parentIdInput = parentId;
             }
 
-            ImGui::InputInt("Parent Entity Id", &parentIdInput);
-
-            if (ImGui::Button("Set Parent##HierarchyParent")) {
-                const entt::entity parent = parentIdInput < 0
-                    ? entt::null
-                    : static_cast<entt::entity>(parentIdInput);
-                Engine::SetHierarchyParent(registry, entity, parent, true);
-            }
-
-            ImGui::SameLine();
-
-            if (ImGui::Button("Clear Parent##HierarchyParent")) {
-                hierarchy->localTransform = registry.get<Transform>(entity);
-                hierarchy->parent = entt::null;
-                parentIdInput = -1;
+            if (hierarchy->parent != entt::null && registry.valid(hierarchy->parent)) {
+                if (hierarchy->inheritTransform) {
+                    if (ImGui::Button("Make Organizational##HierarchyParent")) {
+                        Engine::SetHierarchyParentOrganizational(registry, entity, hierarchy->parent);
+                    }
+                }
+                else {
+                    if (ImGui::Button("Make Attached##HierarchyParent")) {
+                        Engine::SetHierarchyParent(registry, entity, hierarchy->parent, true);
+                    }
+                }
             }
 
             ImGui::SeparatorText("Local Transform");
+            ImGui::TextDisabled("Edited relative to the parent when attached.");
 
             ImGui::DragFloat3("Local Position", &hierarchy->localTransform.position.x, 0.1f);
 

@@ -1,6 +1,7 @@
 #include "ImGuiManager.h"
 #include "ImGuiWindowRegistry.h"
 #include "Core.h"
+#include "RuntimePauseState.h"
 #include "WorldSerializer.h"
 
 #include <imgui.h>
@@ -32,6 +33,14 @@ void ImGuiManager::DrawUi()
     }
 
     if (_core != nullptr &&
+        !_core->IsPlayMode() &&
+        ImGui::GetIO().KeyCtrl &&
+        ImGui::IsKeyPressed(ImGuiKey_N, false))
+    {
+        NewWorld();
+    }
+
+    if (_core != nullptr &&
         ImGui::GetIO().KeyCtrl &&
         ImGui::IsKeyPressed(ImGuiKey_S, false))
     {
@@ -45,11 +54,21 @@ void ImGuiManager::DrawUi()
         RequestWorldFileDialog(WorldFileDialogMode::Open);
     }
 
+    if (!ImGui::GetIO().WantTextInput &&
+        ImGui::GetIO().KeyCtrl &&
+        ImGui::GetIO().KeyShift &&
+        ImGui::IsKeyPressed(ImGuiKey_H, false))
+    {
+        ToggleEditorWindows();
+    }
+
     if (ImGui::BeginMainMenuBar())
     {
         if (ImGui::BeginMenu("File"))
         {
-            ImGui::MenuItem("New", "Ctrl+N");
+            if (ImGui::MenuItem("New", "Ctrl+N", false, _core != nullptr && !_core->IsPlayMode())) {
+                NewWorld();
+            }
             if (ImGui::MenuItem("Open Scene...", "Ctrl+O", false, _core != nullptr)) {
                 RequestWorldFileDialog(WorldFileDialogMode::Open);
             }
@@ -62,41 +81,14 @@ void ImGuiManager::DrawUi()
             ImGui::EndMenu();
         }
 
-        if (ImGui::BeginMenu("Game"))
-        {
-            const bool isPlayMode = _core != nullptr && _core->IsPlayMode();
-
-            if (isPlayMode) {
-                ImGui::BeginDisabled();
-            }
-
-            if (ImGui::MenuItem("Play", nullptr, false, _core != nullptr && !isPlayMode)) {
-                _core->StartPlayMode();
-            }
-
-            if (isPlayMode) {
-                ImGui::EndDisabled();
-            }
-
-            if (!isPlayMode) {
-                ImGui::BeginDisabled();
-            }
-
-            if (ImGui::MenuItem("Stop", nullptr, false, _core != nullptr && isPlayMode)) {
-                _core->StopPlayMode();
-            }
-
-            if (!isPlayMode) {
-                ImGui::EndDisabled();
-            }
-
-            ImGui::Separator();
-            ImGui::TextDisabled(isPlayMode ? "Mode: Play" : "Mode: Edit");
-            ImGui::EndMenu();
-        }
-
         if (ImGui::BeginMenu("Window"))
         {
+            if (ImGui::MenuItem(
+                    windowRegistry.HasHiddenWindows() ? "Restore Editor Windows" : "Hide Editor Windows",
+                    "Ctrl+Shift+H")) {
+                ToggleEditorWindows();
+            }
+            ImGui::Separator();
             windowRegistry.DrawMenuItems();
             ImGui::Separator();
             if (ImGui::MenuItem("Reset Window Positions")) {
@@ -106,6 +98,7 @@ void ImGuiManager::DrawUi()
         }
 
         DrawSceneMenuStatus();
+        DrawPlayControls();
         ImGui::EndMainMenuBar();
     }
 
@@ -115,6 +108,56 @@ void ImGuiManager::DrawUi()
     }
 
     DrawWorldFileDialog();
+}
+
+void ImGuiManager::DrawPlayControls()
+{
+    if (_core == nullptr) {
+        return;
+    }
+
+    const bool isPlayMode = _core->IsPlayMode();
+    const bool isMenuPaused =
+        Engine::HasPauseReason(_registry, Engine::RuntimePauseReason::Menu);
+
+    ImGui::Separator();
+
+    if (isPlayMode) {
+        ImGui::BeginDisabled();
+    }
+
+    if (ImGui::Button("Play")) {
+        Engine::ClearRuntimePause(_registry);
+        _core->StartPlayMode();
+    }
+
+    if (isPlayMode) {
+        ImGui::EndDisabled();
+    }
+
+    ImGui::SameLine();
+
+    if (!isPlayMode) {
+        ImGui::BeginDisabled();
+    }
+
+    if (ImGui::Button("Stop")) {
+        Engine::ClearRuntimePause(_registry);
+        _core->StopPlayMode();
+    }
+
+    ImGui::SameLine();
+
+    if (ImGui::Button(isMenuPaused ? "Resume" : "Pause")) {
+        Engine::SetPauseReason(
+            _registry,
+            Engine::RuntimePauseReason::Menu,
+            !isMenuPaused);
+    }
+
+    if (!isPlayMode) {
+        ImGui::EndDisabled();
+    }
 }
 
 void ImGuiManager::DrawSceneMenuStatus()
@@ -142,6 +185,34 @@ void ImGuiManager::RequestWorldFileDialog(WorldFileDialogMode mode)
     _worldFileDialogMode = mode;
     _overwriteConfirmationActive = false;
     _openWorldFileDialogRequested = true;
+}
+
+void ImGuiManager::NewWorld()
+{
+    if (_core == nullptr || _core->IsPlayMode()) {
+        return;
+    }
+
+    auto serializer = _core->CreateWorldSerializer();
+    const nlohmann::json emptyWorld = {
+        {"version", Engine::Serialization::CurrentWorldVersion},
+        {"entities", nlohmann::json::array()}
+    };
+
+    if (serializer.LoadWorldFromJson(*_core, emptyWorld)) {
+        _core->ClearCurrentWorldPath();
+        _worldFileDialogMode = WorldFileDialogMode::None;
+        _overwriteConfirmationActive = false;
+        _lastSaveSucceeded = true;
+        _saveStatusText = "New scene";
+        _saveStatusTimer = 2.0f;
+        SetWorldPathBuffer("assets/worlds/editor_test.json");
+    }
+    else {
+        _lastSaveSucceeded = false;
+        _saveStatusText = "New scene failed";
+        _saveStatusTimer = 4.0f;
+    }
 }
 
 void ImGuiManager::SaveCurrentWorldOrOpenDialog()
@@ -311,5 +382,16 @@ void ImGuiManager::ResetEditorWindowPositions()
 
     _lastSaveSucceeded = true;
     _saveStatusText = "Window positions reset";
+    _saveStatusTimer = 2.0f;
+}
+
+void ImGuiManager::ToggleEditorWindows()
+{
+    auto& windowRegistry = _registry.ctx().get<ImGuiWindowRegistry>();
+    const bool restoring = windowRegistry.HasHiddenWindows();
+    windowRegistry.ToggleHiddenWindows();
+
+    _lastSaveSucceeded = true;
+    _saveStatusText = restoring ? "Editor windows restored" : "Editor windows hidden";
     _saveStatusTimer = 2.0f;
 }

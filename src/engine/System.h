@@ -5,10 +5,12 @@ class System {
 public:
 	System(entt::registry& registry) : _registry(registry) {}
 	virtual ~System() = default;
-	virtual void Update(float deltaTime) = 0;
-	virtual void FixedUpdate(float deltaTime) = 0;
-	virtual void DrawUi() = 0;
-	virtual void Draw() = 0;
+	virtual void OnPlayStart() {}
+	virtual void OnPlayStop() {}
+	virtual void Update(float deltaTime) {}
+	virtual void FixedUpdate(float deltaTime) {}
+	virtual void DrawUi() {}
+	virtual void Draw() {}
 
 protected:
 	entt::registry& _registry;

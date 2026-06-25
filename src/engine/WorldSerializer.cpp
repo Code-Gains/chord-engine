@@ -4,6 +4,7 @@
 #include "Core.h"
 #include "GravityComponents.h"
 #include "HierarchyComponent.h"
+#include "EntityState.h"
 #include "Log.h"
 #include "MeshComponent.h"
 #include "NameComponent.h"
@@ -633,6 +634,7 @@ void WorldSerializer::RegisterDefaultComponentSerializers()
 
     _componentSerializers.RegisterTag<SingleRenderTag>("SingleRenderTag");
     _componentSerializers.RegisterTag<ActiveCameraTag>("ActiveCameraTag");
+    _componentSerializers.RegisterTag<DisabledEntityTag>("DisabledEntityTag");
 
     _componentSerializers.Register<Camera>(
         "Camera",

@@ -36,7 +36,6 @@ class Simulation : public System {
 public:
     Simulation(entt::registry& registry);
     void Initialize(std::shared_ptr<MeshAsset> centerMesh, std::shared_ptr<MeshAsset> particleMesh);
-    void Update(float deltaTime) override {};
     void FixedUpdate(float deltaTime) override;
     virtual void DrawUi() override;
     virtual void Draw() override;

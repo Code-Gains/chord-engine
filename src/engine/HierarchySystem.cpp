@@ -108,6 +108,40 @@ bool WouldCreateHierarchyCycle(
     return false;
 }
 
+Transform ComposeHierarchyWorldTransform(
+    entt::registry& registry,
+    entt::entity parent,
+    const Transform& localTransform)
+{
+    if (parent == entt::null ||
+        !registry.valid(parent) ||
+        !registry.all_of<Transform>(parent)) {
+        return localTransform;
+    }
+
+    return TransformFromMatrix(
+        ComposeMatrix(registry.get<Transform>(parent)) *
+        ComposeMatrix(localTransform)
+    );
+}
+
+Transform ComputeHierarchyLocalTransform(
+    entt::registry& registry,
+    entt::entity parent,
+    const Transform& worldTransform)
+{
+    if (parent == entt::null ||
+        !registry.valid(parent) ||
+        !registry.all_of<Transform>(parent)) {
+        return worldTransform;
+    }
+
+    return TransformFromMatrix(
+        glm::inverse(ComposeMatrix(registry.get<Transform>(parent))) *
+        ComposeMatrix(worldTransform)
+    );
+}
+
 void SetHierarchyParent(
     entt::registry& registry,
     entt::entity child,
@@ -125,18 +159,59 @@ void SetHierarchyParent(
 
     auto& hierarchy = registry.get_or_emplace<HierarchyComponent>(child);
     auto& childTransform = registry.get<Transform>(child);
+    hierarchy.inheritTransform = true;
 
-    if (preserveWorldTransform && parent != entt::null && registry.all_of<Transform>(parent)) {
-        const glm::mat4 localMatrix =
-            glm::inverse(ComposeMatrix(registry.get<Transform>(parent))) *
-            ComposeMatrix(childTransform);
-        hierarchy.localTransform = TransformFromMatrix(localMatrix);
+    if (preserveWorldTransform) {
+        hierarchy.localTransform = ComputeHierarchyLocalTransform(registry, parent, childTransform);
     }
-    else if (preserveWorldTransform) {
+    else {
         hierarchy.localTransform = childTransform;
+        childTransform = ComposeHierarchyWorldTransform(registry, parent, hierarchy.localTransform);
     }
 
     hierarchy.parent = parent;
+}
+
+void SetHierarchyParentLocal(
+    entt::registry& registry,
+    entt::entity child,
+    entt::entity parent,
+    const Transform& localTransform)
+{
+    if (child == entt::null ||
+        !registry.valid(child) ||
+        !registry.all_of<Transform>(child) ||
+        parent == child ||
+        (parent != entt::null && !registry.valid(parent)) ||
+        WouldCreateHierarchyCycle(registry, child, parent)) {
+        return;
+    }
+
+    auto& hierarchy = registry.get_or_emplace<HierarchyComponent>(child);
+    hierarchy.parent = parent;
+    hierarchy.inheritTransform = true;
+    hierarchy.localTransform = localTransform;
+    registry.get<Transform>(child) = ComposeHierarchyWorldTransform(registry, parent, localTransform);
+}
+
+void SetHierarchyParentOrganizational(
+    entt::registry& registry,
+    entt::entity child,
+    entt::entity parent)
+{
+    if (child == entt::null ||
+        !registry.valid(child) ||
+        !registry.all_of<Transform>(child) ||
+        parent == child ||
+        (parent != entt::null && !registry.valid(parent)) ||
+        WouldCreateHierarchyCycle(registry, child, parent)) {
+        return;
+    }
+
+    auto& hierarchy = registry.get_or_emplace<HierarchyComponent>(child);
+    hierarchy.parent = parent;
+    hierarchy.inheritTransform = false;
+    hierarchy.localTransform = registry.get<Transform>(child);
 }
 
 void ResolveHierarchyTransforms(entt::registry& registry)

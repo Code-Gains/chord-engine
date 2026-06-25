@@ -1,6 +1,7 @@
 #include "VelocityIntegrationSystem.h"
 
 #include "Core.h"
+#include "EntityState.h"
 #include "GravityComponents.h"
 #include "RuntimePauseState.h"
 #include "Transform.h"
@@ -23,9 +24,13 @@ void VelocityIntegrationSystem::FixedUpdate(float deltaTime)
         return;
     }
 
-    auto view = _registry.view<Transform, VelocityComponent>();
+    auto view = _registry.view<Transform, VelocityComponent>(entt::exclude<DisabledEntityTag>);
 
     for (auto entity : view) {
+        if (IsEntityDisabled(_registry, entity)) {
+            continue;
+        }
+
         auto& transform = view.get<Transform>(entity);
         auto& velocity = view.get<VelocityComponent>(entity);
 

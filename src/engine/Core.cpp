@@ -13,6 +13,7 @@ using Clock = std::chrono::high_resolution_clock;
 #include "NameComponent.h"
 #include "WorldSerializer.h"
 #include "EditorSelection.h"
+#include "EntityState.h"
 #include "HierarchySystem.h"
 
 #include <imgui.h>
@@ -175,12 +176,19 @@ void Core::StartPlayMode()
     auto serializer = CreateWorldSerializer();
     _playModeSnapshot = serializer.SaveWorldToJson(*this);
     _editorMode = EditorMode::Play;
+    for (auto& system : _systems) {
+        system->OnPlayStart();
+    }
 }
 
 void Core::StopPlayMode()
 {
     if (_editorMode == EditorMode::Edit) {
         return;
+    }
+
+    for (auto& system : _systems) {
+        system->OnPlayStop();
     }
 
     auto serializer = CreateWorldSerializer();
@@ -459,20 +467,24 @@ entt::entity Core::ResolveRenderCameraEntity()
 {
     if (IsPlayMode()) {
         auto playCameraView =
-            _registry.view<Camera, Transform, ActiveCameraTag>(entt::exclude<CoreOwnedTag>);
+            _registry.view<Camera, Transform, ActiveCameraTag>(entt::exclude<CoreOwnedTag, DisabledEntityTag>);
 
-        if (playCameraView.begin() != playCameraView.end()) {
-            return *playCameraView.begin();
+        for (auto entity : playCameraView) {
+            if (!IsEntityDisabled(_registry, entity)) {
+                return entity;
+            }
         }
 
         return entt::null;
     }
 
     auto pilotCameraView =
-        _registry.view<Camera, Transform, EditorCameraPilotTag>(entt::exclude<CoreOwnedTag>);
+        _registry.view<Camera, Transform, EditorCameraPilotTag>(entt::exclude<CoreOwnedTag, DisabledEntityTag>);
 
-    if (pilotCameraView.begin() != pilotCameraView.end()) {
-        return *pilotCameraView.begin();
+    for (auto entity : pilotCameraView) {
+        if (!IsEntityDisabled(_registry, entity)) {
+            return entity;
+        }
     }
 
     auto editorCameraView = _registry.view<Camera, Transform, ActiveCameraTag, CoreOwnedTag>();
@@ -481,10 +493,12 @@ entt::entity Core::ResolveRenderCameraEntity()
     }
 
     auto sceneCameraView =
-        _registry.view<Camera, Transform, ActiveCameraTag>(entt::exclude<CoreOwnedTag>);
+        _registry.view<Camera, Transform, ActiveCameraTag>(entt::exclude<CoreOwnedTag, DisabledEntityTag>);
 
-    if (sceneCameraView.begin() != sceneCameraView.end()) {
-        return *sceneCameraView.begin();
+    for (auto entity : sceneCameraView) {
+        if (!IsEntityDisabled(_registry, entity)) {
+            return entity;
+        }
     }
 
     return entt::null;
@@ -786,9 +800,13 @@ void Core::DrawGeometry(VkCommandBuffer cmd)
         DestroyBuffer(gpuSceneDataBuffer);
     });
 
-    auto sunlightView = _registry.view<SunlightComponent>();
-    if (!sunlightView.empty()) {
-        auto lightEntity = *sunlightView.begin();
+    bool foundSunlight = false;
+    auto sunlightView = _registry.view<SunlightComponent>(entt::exclude<DisabledEntityTag>);
+    for (auto lightEntity : sunlightView) {
+        if (IsEntityDisabled(_registry, lightEntity)) {
+            continue;
+        }
+
         auto& sunlight = sunlightView.get<SunlightComponent>(lightEntity);
 
         sceneData.sunlightDirection =
@@ -801,8 +819,10 @@ void Core::DrawGeometry(VkCommandBuffer cmd)
                 sunlight.color,
                 sunlight.ambient
             );
+        foundSunlight = true;
+        break;
     }
-    else {
+    if (!foundSunlight) {
         sceneData.sunlightDirection = glm::vec4(0.0f);
         sceneData.ambientColor = glm::vec4(0.0f);
     }
@@ -907,9 +927,13 @@ void Core::DrawGeometry(VkCommandBuffer cmd)
         }
 
         // exclude entities that are not meant for batch rendering
-        auto registryView = _registry.view<MeshComponent, Transform>(entt::exclude<SingleRenderTag, EffectMeshComponent>);
+        auto registryView = _registry.view<MeshComponent, Transform>(entt::exclude<SingleRenderTag, EffectMeshComponent, DisabledEntityTag>);
 
         for (auto entity : registryView) {
+            if (IsEntityDisabled(_registry, entity)) {
+                continue;
+            }
+
             auto& meshComponent = registryView.get<MeshComponent>(entity);
             auto& trans = registryView.get<Transform>(entity);
 
@@ -1063,9 +1087,13 @@ void Core::DrawGeometry(VkCommandBuffer cmd)
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, _meshPipelineLayout, 2, 1, &_environmentDescriptorSet, 0, nullptr);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, _meshPipelineLayout, 3, 1, &_shadowDescriptorSet, 0, nullptr);
     // ECS Singles rendering
-    auto registryViewSingles = _registry.view<MeshComponent, Transform, SingleRenderTag>(entt::exclude<EffectMeshComponent>);
+    auto registryViewSingles = _registry.view<MeshComponent, Transform, SingleRenderTag>(entt::exclude<EffectMeshComponent, DisabledEntityTag>);
 
     for (auto entity : registryViewSingles) {
+        if (IsEntityDisabled(_registry, entity)) {
+            continue;
+        }
+
         auto& meshComponent = registryViewSingles.get<MeshComponent>(entity);
         auto& transformComponent = registryViewSingles.get<Transform>(entity);
 
@@ -1177,7 +1205,7 @@ void Core::DrawEffectMeshes(
     }
 
     std::vector<entt::entity> expiredEffects;
-    auto effectView = _registry.view<MeshComponent, Transform, EffectMeshComponent>();
+    auto effectView = _registry.view<MeshComponent, Transform, EffectMeshComponent>(entt::exclude<DisabledEntityTag>);
     if (effectView.begin() == effectView.end()) {
         return;
     }
@@ -1185,6 +1213,10 @@ void Core::DrawEffectMeshes(
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, _effectMeshPipeline);
 
     for (auto entity : effectView) {
+        if (IsEntityDisabled(_registry, entity)) {
+            continue;
+        }
+
         auto& meshComponent = effectView.get<MeshComponent>(entity);
         auto& transformComponent = effectView.get<Transform>(entity);
         auto& effect = effectView.get<EffectMeshComponent>(entity);
@@ -1285,8 +1317,12 @@ glm::mat4 Core::BuildSunLightViewProjection()
     const float radius = glm::max(_shadowOrthoRadius, 1.0f);
     float depthRadius = glm::max(_shadowDepthRadius, radius * 2.0f);
 
-    auto meshView = _registry.view<MeshComponent, Transform>(entt::exclude<EffectMeshComponent>);
+    auto meshView = _registry.view<MeshComponent, Transform>(entt::exclude<EffectMeshComponent, DisabledEntityTag>);
     for (auto entity : meshView) {
+        if (IsEntityDisabled(_registry, entity)) {
+            continue;
+        }
+
         const auto& mesh = meshView.get<MeshComponent>(entity);
         if (!mesh.mesh || mesh.mesh->surfaces.empty()) {
             continue;
@@ -1334,11 +1370,15 @@ void Core::DrawShadowMap(VkCommandBuffer cmd)
         return;
     }
 
-    auto sunlightView = _registry.view<SunlightComponent>();
-    if (!sunlightView.empty()) {
-        auto lightEntity = *sunlightView.begin();
+    auto sunlightView = _registry.view<SunlightComponent>(entt::exclude<DisabledEntityTag>);
+    for (auto lightEntity : sunlightView) {
+        if (IsEntityDisabled(_registry, lightEntity)) {
+            continue;
+        }
+
         const auto& sunlight = sunlightView.get<SunlightComponent>(lightEntity);
         sceneData.sunlightDirection = glm::vec4(glm::normalize(sunlight.direction), sunlight.intensity);
+        break;
     }
 
     _sunLightViewProjection = BuildSunLightViewProjection();
@@ -1375,8 +1415,12 @@ void Core::DrawShadowMap(VkCommandBuffer cmd)
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, _shadowPipeline);
 
-    auto meshView = _registry.view<MeshComponent, Transform>(entt::exclude<EffectMeshComponent>);
+    auto meshView = _registry.view<MeshComponent, Transform>(entt::exclude<EffectMeshComponent, DisabledEntityTag>);
     for (auto entity : meshView) {
+        if (IsEntityDisabled(_registry, entity)) {
+            continue;
+        }
+
         auto& meshComponent = meshView.get<MeshComponent>(entity);
         auto& transformComponent = meshView.get<Transform>(entity);
 
@@ -1429,10 +1473,14 @@ void Core::DrawLines(VkCommandBuffer cmd, const glm::mat4& viewProjection)
     std::vector<LineVertex> vertices;
     std::vector<entt::entity> expiredLines;
 
-    auto lineView = _registry.view<LineComponent>();
+    auto lineView = _registry.view<LineComponent>(entt::exclude<DisabledEntityTag>);
     vertices.reserve(128);
 
     for (auto entity : lineView) {
+        if (IsEntityDisabled(_registry, entity)) {
+            continue;
+        }
+
         auto& line = lineView.get<LineComponent>(entity);
         vertices.push_back(LineVertex{ line.start, 0.0f, line.color });
         vertices.push_back(LineVertex{ line.end, 0.0f, line.color });
@@ -1504,6 +1552,7 @@ void Core::DrawSelectedOutline(VkCommandBuffer cmd)
         const auto& selection = _registry.ctx().get<EditorSelection>();
         if (selection.selectedEntity != entt::null &&
             _registry.valid(selection.selectedEntity) &&
+            !IsEntityDisabled(_registry, selection.selectedEntity) &&
             _registry.all_of<MeshComponent, Transform>(selection.selectedEntity)) {
             outlineEntities.push_back(selection.selectedEntity);
         }

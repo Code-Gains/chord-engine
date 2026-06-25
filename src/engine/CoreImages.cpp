@@ -3,6 +3,8 @@
 #include "vk_images.h"
 #include "stb_image.h"
 
+#include <imgui_impl_vulkan.h>
+
 namespace Engine {
 AllocatedImage Core::CreateImage(VkExtent3D size, VkFormat format, VkImageUsageFlags usage, bool mipmapped, VkSampleCountFlagBits samples)
 {
@@ -160,6 +162,61 @@ void Core::DestroyImage(const AllocatedImage &img)
 {
     vkDestroyImageView(_device, img.imageView, nullptr);
     vmaDestroyImage(_allocator, img.image, img.allocation);
+}
+
+AllocatedImage* Core::LoadUiImage(const std::filesystem::path& path)
+{
+    const std::filesystem::path resolvedPath = ResolveProjectPath(path);
+    const std::string cacheKey = MakeProjectRelative(resolvedPath).generic_string();
+
+    if (auto existing = _uiImages.find(cacheKey); existing != _uiImages.end()) {
+        return existing->second.get();
+    }
+
+    int width = 0;
+    int height = 0;
+    int channels = 0;
+
+    unsigned char* data = stbi_load(
+        resolvedPath.string().c_str(),
+        &width,
+        &height,
+        &channels,
+        STBI_rgb_alpha
+    );
+
+    if (!data) {
+        std::cout << "Failed to load UI image: " << resolvedPath << "\n";
+        return nullptr;
+    }
+
+    auto loadedImage = std::make_shared<AllocatedImage>(CreateImage(
+        data,
+        VkExtent3D{
+            static_cast<uint32_t>(width),
+            static_cast<uint32_t>(height),
+            1
+        },
+        VK_FORMAT_R8G8B8A8_UNORM,
+        VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT
+    ));
+
+    stbi_image_free(data);
+
+    loadedImage->sampler = _defaultSamplerLinear;
+    loadedImage->imguiDescriptorSet = ImGui_ImplVulkan_AddTexture(
+        loadedImage->sampler,
+        loadedImage->imageView,
+        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+    );
+
+    AllocatedImage* imageToDelete = loadedImage.get();
+    _mainDeletionQueue.push_function([this, imageToDelete]() {
+        DestroyImage(*imageToDelete);
+    });
+
+    auto [inserted, _] = _uiImages.emplace(cacheKey, std::move(loadedImage));
+    return inserted->second.get();
 }
 
 AllocatedImage Core::CreateCubemap(const std::array<std::string, 6>& facePaths)

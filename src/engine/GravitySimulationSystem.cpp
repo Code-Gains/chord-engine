@@ -1,6 +1,7 @@
 #include "GravitySimulationSystem.h"
 
 #include "Core.h"
+#include "EntityState.h"
 #include "GravityComponents.h"
 #include "RuntimePauseState.h"
 #include "Transform.h"
@@ -49,12 +50,17 @@ void GravitySimulationSystem::FixedUpdate(float deltaTime)
 
     std::unordered_map<entt::entity, GravityAccumulation> accumulations;
 
-    auto bodyView = _registry.view<Transform, GravityBodyComponent, VelocityComponent>();
+    auto bodyView = _registry.view<Transform, GravityBodyComponent, VelocityComponent>(
+        entt::exclude<DisabledEntityTag>);
     auto particleView = _registry.view<Transform, GravityParticleComponent, VelocityComponent>(
-        entt::exclude<GravityBodyComponent>
+        entt::exclude<GravityBodyComponent, DisabledEntityTag>
     );
 
     for (auto entity : bodyView) {
+        if (IsEntityDisabled(_registry, entity)) {
+            continue;
+        }
+
         auto& gravityState = _registry.get_or_emplace<GravityStateComponent>(entity);
         gravityState.acceleration = glm::vec3{ 0.0f };
         gravityState.gravityDirection = glm::vec3{ 0.0f, -1.0f, 0.0f };
@@ -62,6 +68,10 @@ void GravitySimulationSystem::FixedUpdate(float deltaTime)
     }
 
     for (auto entity : particleView) {
+        if (IsEntityDisabled(_registry, entity)) {
+            continue;
+        }
+
         auto& gravityState = _registry.get_or_emplace<GravityStateComponent>(entity);
         gravityState.acceleration = glm::vec3{ 0.0f };
         gravityState.gravityDirection = glm::vec3{ 0.0f, -1.0f, 0.0f };
@@ -70,6 +80,10 @@ void GravitySimulationSystem::FixedUpdate(float deltaTime)
 
     for (auto itA = bodyView.begin(); itA != bodyView.end(); ++itA) {
         auto entityA = *itA;
+        if (IsEntityDisabled(_registry, entityA)) {
+            continue;
+        }
+
         auto& transformA = bodyView.get<Transform>(entityA);
         auto& bodyA = bodyView.get<GravityBodyComponent>(entityA);
 
@@ -78,6 +92,10 @@ void GravitySimulationSystem::FixedUpdate(float deltaTime)
 
         for (; itB != bodyView.end(); ++itB) {
             auto entityB = *itB;
+            if (IsEntityDisabled(_registry, entityB)) {
+                continue;
+            }
+
             auto& transformB = bodyView.get<Transform>(entityB);
             auto& bodyB = bodyView.get<GravityBodyComponent>(entityB);
 
@@ -104,10 +122,18 @@ void GravitySimulationSystem::FixedUpdate(float deltaTime)
     }
 
     for (auto particleEntity : particleView) {
+        if (IsEntityDisabled(_registry, particleEntity)) {
+            continue;
+        }
+
         auto& particleTransform = particleView.get<Transform>(particleEntity);
         auto& particle = particleView.get<GravityParticleComponent>(particleEntity);
 
         for (auto bodyEntity : bodyView) {
+            if (IsEntityDisabled(_registry, bodyEntity)) {
+                continue;
+            }
+
             auto& bodyTransform = bodyView.get<Transform>(bodyEntity);
             auto& body = bodyView.get<GravityBodyComponent>(bodyEntity);
 
@@ -128,7 +154,10 @@ void GravitySimulationSystem::FixedUpdate(float deltaTime)
     }
 
     for (auto& [entity, accumulation] : accumulations) {
-        if (!_registry.valid(entity) || !_registry.all_of<VelocityComponent>(entity)) {
+        if (!_registry.valid(entity) ||
+            _registry.all_of<DisabledEntityTag>(entity) ||
+            IsEntityDisabled(_registry, entity) ||
+            !_registry.all_of<VelocityComponent>(entity)) {
             continue;
         }
 

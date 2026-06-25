@@ -5,12 +5,15 @@
 #include <imgui_impl_vulkan.h>
 #include "Core.h"
 #include "EditorSelection.h"
+#include "EntityState.h"
 #include "InputSystem.h"
 #include "NameComponent.h"
 #include "HierarchyComponent.h"
+#include "HierarchySystem.h"
 #include "WorldSerializer.h"
 #include <ImGuiWindowRegistry.h>
 #include <cctype>
+#include <cstdint>
 #include <vector>
 
 namespace {
@@ -264,6 +267,7 @@ void RegistryViewer::DrawUi()
         ImGui::Checkbox("Show entity ids", &_showEntityIds);
 
         ImGui::Separator();
+        ImGui::TextDisabled("Drag entity onto another to attach. Hold Shift to organize only.");
 
         auto view = _registry.view<Transform>();
         for (auto entity : view) {
@@ -280,6 +284,27 @@ void RegistryViewer::DrawUi()
             if (!HasVisibleParent(_registry, entity, _showCoreOwnedEntities)) {
                 DrawEntityNode(entity);
             }
+        }
+
+        ImVec2 emptyDropSize = ImGui::GetContentRegionAvail();
+        emptyDropSize.x = std::max(emptyDropSize.x, 1.0f);
+        emptyDropSize.y = std::max(emptyDropSize.y, 36.0f);
+
+        ImGui::InvisibleButton("##RegistryEmptyDropTarget", emptyDropSize);
+        if (ImGui::BeginDragDropTarget()) {
+            if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("REGISTRY_ENTITY")) {
+                const auto entityId = *static_cast<const uint32_t*>(payload->Data);
+                const auto child = static_cast<entt::entity>(entityId);
+                if (child != entt::null &&
+                    _registry.valid(child) &&
+                    _registry.all_of<Transform>(child)) {
+                    if (_registry.all_of<HierarchyComponent>(child)) {
+                        _registry.remove<HierarchyComponent>(child);
+                    }
+                    SetSelectedEntity(child);
+                }
+            }
+            ImGui::EndDragDropTarget();
         }
     }
 
@@ -377,6 +402,8 @@ void RegistryViewer::DrawEntityNode(entt::entity entity)
         label += " [" + std::to_string((int)entt::to_integral(entity)) + "]";
     }
 
+    const bool disabled = IsEntityDisabled(_registry, entity);
+
     bool hasChildren = false;
     auto hierarchyView = _registry.view<HierarchyComponent>();
     for (auto child : hierarchyView) {
@@ -403,10 +430,44 @@ void RegistryViewer::DrawEntityNode(entt::entity entity)
     }
 
     ImGui::PushID((int)entt::to_integral(entity));
+    if (disabled) {
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4{ 0.45f, 0.52f, 0.48f, 1.0f });
+    }
     const bool open = ImGui::TreeNodeEx(label.c_str(), flags);
+    if (disabled) {
+        ImGui::PopStyleColor();
+    }
 
     if (ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen()) {
         SetSelectedEntity(entity);
+    }
+
+    if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
+        const uint32_t entityId = static_cast<uint32_t>(entt::to_integral(entity));
+        ImGui::SetDragDropPayload("REGISTRY_ENTITY", &entityId, sizeof(entityId));
+        ImGui::TextUnformatted(label.c_str());
+        ImGui::EndDragDropSource();
+    }
+
+    if (ImGui::BeginDragDropTarget()) {
+        if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("REGISTRY_ENTITY")) {
+            const auto entityId = *static_cast<const uint32_t*>(payload->Data);
+            const auto child = static_cast<entt::entity>(entityId);
+            if (child != entity &&
+                child != entt::null &&
+                _registry.valid(child) &&
+                _registry.all_of<Transform>(child)) {
+                if (ImGui::GetIO().KeyShift) {
+                    Engine::SetHierarchyParentOrganizational(_registry, child, entity);
+                }
+                else {
+                    Engine::SetHierarchyParent(_registry, child, entity, true);
+                }
+
+                SetSelectedEntity(child);
+            }
+        }
+        ImGui::EndDragDropTarget();
     }
 
     if (hasChildren && open) {

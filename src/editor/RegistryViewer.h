@@ -11,9 +11,7 @@ class Core;
 
 class RegistryViewer : public System {
     void Update(float deltaTime) override;
-    void FixedUpdate(float deltaTime) override {};
     virtual void DrawUi() override;
-    virtual void Draw() override {};
 
     entt::entity _selectedEntity{ entt::null };
     bool _showCoreOwnedEntities = false;

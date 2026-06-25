@@ -37,9 +37,6 @@ class InputSystem : public System {
 public:
     InputSystem(entt::registry& registry, entt::entity inputEntity, Engine::WindowGLFW* engineWindow);
     void Update(float deltaTime) override;
-    void FixedUpdate(float deltaTime) override {};
-    virtual void DrawUi() override {};
-    virtual void Draw() override {};
     void AddKeyToMonitor(int key) { _monitoredKeys.push_back(key); }
 
 private:

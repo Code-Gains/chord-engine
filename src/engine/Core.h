@@ -465,6 +465,7 @@ private:
     AllocatedImage _defaultMetallicRoughnessImage;
     AllocatedImage _errorCheckerboardImage;
     std::vector<std::shared_ptr<AllocatedImage>> _loadedImages;
+    std::unordered_map<std::string, std::shared_ptr<AllocatedImage>> _uiImages;
 
     VkSampler _defaultSamplerLinear;
     VkSampler _defaultSamplerNearest;
@@ -595,6 +596,8 @@ public:
         std::span<uint32_t> indices,
         std::span<Vertex> vertices
     );
+
+    AllocatedImage* LoadUiImage(const std::filesystem::path& path);
 
     // ------------------------------------------------------------------------
     // Shared thread pool access

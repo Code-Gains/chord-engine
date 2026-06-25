@@ -130,6 +130,10 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(entt)
 
+target_compile_options(EnTT INTERFACE
+    $<$<CXX_COMPILER_ID:Clang>:-Wno-deprecated-literal-operator>
+)
+
 # ---------------------
 # nlohmann_json
 # ---------------------
