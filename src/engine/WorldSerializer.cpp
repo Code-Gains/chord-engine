@@ -2,6 +2,7 @@
 
 #include "Camera.h"
 #include "Core.h"
+#include "EnvironmentComponent.h"
 #include "GravityComponents.h"
 #include "HierarchyComponent.h"
 #include "HeightFogComponent.h"
@@ -1068,6 +1069,20 @@ void WorldSerializer::RegisterDefaultComponentSerializers()
     _componentSerializers.RegisterTag<SingleRenderTag>("SingleRenderTag");
     _componentSerializers.RegisterTag<ActiveCameraTag>("ActiveCameraTag");
     _componentSerializers.RegisterTag<DisabledEntityTag>("DisabledEntityTag");
+
+    _componentSerializers.Register<EnvironmentComponent>(
+        "EnvironmentComponent",
+        [](Core&, const EnvironmentComponent& environment) {
+            return nlohmann::json {
+                {"skyboxPath", environment.skyboxPath}
+            };
+        },
+        [](Core&, const nlohmann::json& data) {
+            EnvironmentComponent environment;
+            environment.skyboxPath = data.value("skyboxPath", environment.skyboxPath);
+            return environment;
+        }
+    );
 
     _componentSerializers.Register<Camera>(
         "Camera",

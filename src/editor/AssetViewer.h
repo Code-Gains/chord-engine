@@ -1,6 +1,7 @@
 #pragma once
 
 #include <engine/Core.h>
+#include <engine/SoundCueAsset.h>
 #include <engine/System.h>
 #include "RegistryViewer.h"
 
@@ -22,7 +23,10 @@ private:
     enum class AssetKind {
         Mesh,
         World,
-        Prefab
+        Prefab,
+        Skybox,
+        AudioClip,
+        SoundCue
     };
 
     struct AssetFileEntry {
@@ -45,10 +49,18 @@ private:
     std::filesystem::path _deleteCandidateProjectPath;
     std::vector<std::filesystem::path> _deleteCandidateTargets;
     bool _openDeleteConfirmation = false;
+    SoundCueAsset _editedSoundCue;
+    bool _soundCueLoaded = false;
+    bool _soundCueDirty = false;
 
     void RefreshAssetList(bool updateStatus = true);
     std::vector<std::shared_ptr<MeshAsset>>* GetOrLoadMeshes(const std::filesystem::path& projectPath);
     void AssignMeshToSelectedEntity(const std::shared_ptr<MeshAsset>& mesh);
+    void AssignSkyboxToSelectedEntity(const std::filesystem::path& projectPath);
+    void CreateSoundCueFromClip(const std::filesystem::path& clipPath);
+    void LoadSelectedSoundCue();
+    void SaveSelectedSoundCue();
+    void DrawSoundCueEditor();
     void LoadSelectedWorld();
     void InstantiateSelectedPrefab();
     void SaveSelectedEntityAsPrefab(bool overwriteConfirmed = false);
@@ -57,6 +69,7 @@ private:
     void ConfirmDeleteAsset();
     std::vector<std::filesystem::path> BuildDeleteTargets(const std::filesystem::path& projectPath) const;
     bool IsProjectAssetPath(const std::filesystem::path& projectPath) const;
+    bool IsSkyboxFolder(const std::filesystem::path& path) const;
     void SetPrefabPathBuffer(const std::filesystem::path& projectPath);
     void SetStatus(std::string text, bool succeeded);
 };

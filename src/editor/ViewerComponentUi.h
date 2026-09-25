@@ -15,6 +15,7 @@
 
 #include "Transform.h"
 #include "Core.h"
+#include "EnvironmentComponent.h"
 #include "NameComponent.h"
 #include "ScreenPostProcessComponent.h"
 #include "SunlightComponent.h"
@@ -27,6 +28,36 @@
 #include "JoltPhysicsComponents.h"
 #include "CameraShotEditorUi.h"
 #include "EditorUiLayout.h"
+
+namespace EditorUi {
+
+inline bool DrawSoundCueField(const char* label, std::string& cuePath)
+{
+    char pathBuffer[512] {};
+    std::snprintf(pathBuffer, sizeof(pathBuffer), "%s", cuePath.c_str());
+
+    bool changed = false;
+    if (ImGui::InputText(label, pathBuffer, sizeof(pathBuffer))) {
+        cuePath = pathBuffer;
+        changed = true;
+    }
+
+    if (ImGui::BeginDragDropTarget()) {
+        if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("ENGINE_SOUND_CUE_ASSET")) {
+            cuePath.assign(
+                static_cast<const char*>(payload->Data),
+                static_cast<std::size_t>(payload->DataSize) > 0
+                    ? static_cast<std::size_t>(payload->DataSize) - 1
+                    : 0);
+            changed = true;
+        }
+        ImGui::EndDragDropTarget();
+    }
+
+    return changed;
+}
+
+}
 
 class ViewerComponentUi
 {
@@ -228,6 +259,42 @@ public:
             ImGui::DragFloat("Mask Feather##ScreenPostProcessMaskFeather", &effect->maskFeather, 0.001f, 0.0f, 1.0f);
             ImGui::DragFloat("Speed##ScreenPostProcessSpeed", &effect->speed, 0.01f, 0.0f, 100.0f);
             ImGui::DragFloat("Age##ScreenPostProcessAge", &effect->age, 0.01f, 0.0f, 100000.0f);
+        }
+    }
+};
+
+class EnvironmentComponentUi : public ViewerComponentUi {
+public:
+    void Draw(entt::registry& registry, entt::entity entity) override {
+        auto* environment = registry.try_get<EnvironmentComponent>(entity);
+        if (!environment)
+            return;
+
+        if (DrawRemovableComponentHeader<EnvironmentComponent>(
+            registry,
+            entity,
+            "Environment",
+            "EnvironmentComponent"))
+        {
+            ImGui::TextUnformatted("Skybox");
+            if (environment->skyboxPath.empty()) {
+                ImGui::TextDisabled("No skybox assigned.");
+            }
+            else {
+                ImGui::TextWrapped("%s", environment->skyboxPath.c_str());
+            }
+
+            ImGui::Button("Drop Skybox Folder Here", ImVec2(-1.0f, 0.0f));
+            if (ImGui::BeginDragDropTarget()) {
+                if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("ENGINE_SKYBOX_ASSET")) {
+                    environment->skyboxPath.assign(
+                        static_cast<const char*>(payload->Data),
+                        static_cast<std::size_t>(payload->DataSize) > 0
+                            ? static_cast<std::size_t>(payload->DataSize) - 1
+                            : 0);
+                }
+                ImGui::EndDragDropTarget();
+            }
         }
     }
 };

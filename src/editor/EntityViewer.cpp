@@ -9,6 +9,7 @@
 #include "GravityComponents.h"
 #include "HierarchyComponent.h"
 #include "EntityState.h"
+#include "EnvironmentComponent.h"
 #include "LineComponent.h"
 
 #include <algorithm>
@@ -284,6 +285,7 @@ EntityViewer::EntityViewer(entt::registry &registry, RegistryViewer* registryVie
     _componentUis.push_back(std::make_unique<NameComponentUi>());
     _componentUis.push_back(std::make_unique<TransformComponentUi>());
     _componentUis.push_back(std::make_unique<HierarchyComponentUi>());
+    _componentUis.push_back(std::make_unique<EnvironmentComponentUi>());
     _componentUis.push_back(std::make_unique<SunlightComponentUI>());
     _componentUis.push_back(std::make_unique<ScreenPostProcessComponentUi>());
     _componentUis.push_back(std::make_unique<ScreenPostProcessSourceComponentUi>());
@@ -319,6 +321,16 @@ EntityViewer::EntityViewer(entt::registry &registry, RegistryViewer* registryVie
         },
         [](entt::registry& registry, entt::entity entity) {
             registry.emplace<Transform>(entity);
+        }
+    );
+
+    AddComponentMenuItem(
+        "Environment",
+        [](entt::registry& registry, entt::entity entity) {
+            return !registry.all_of<EnvironmentComponent>(entity);
+        },
+        [](entt::registry& registry, entt::entity entity) {
+            registry.emplace<EnvironmentComponent>(entity);
         }
     );
 

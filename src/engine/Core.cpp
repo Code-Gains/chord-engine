@@ -15,6 +15,7 @@ using Clock = std::chrono::high_resolution_clock;
 #include "WorldSerializer.h"
 #include "EditorSelection.h"
 #include "EditorCaptureState.h"
+#include "EnvironmentComponent.h"
 #include "EntityState.h"
 #include "HierarchySystem.h"
 #include "JoltPhysicsSystem.h"
@@ -341,6 +342,31 @@ std::filesystem::path Core::MakeProjectRelative(const std::filesystem::path& pat
     }
 
     return relativePath.generic_string();
+}
+
+bool Core::PlayProjectAudioOneShot(
+    const std::filesystem::path& path,
+    float gain,
+    float pitch)
+{
+    return _audioSystem.PlayWavOneShot(ResolveProjectPath(path), gain, pitch);
+}
+
+bool Core::PlayProjectSoundCue(
+    const std::filesystem::path& path,
+    float gainScale,
+    float pitchScale)
+{
+    return _audioSystem.PlaySoundCue(
+        ResolveProjectPath(path),
+        _projectRoot,
+        gainScale,
+        pitchScale);
+}
+
+void Core::InvalidateProjectSoundCue(const std::filesystem::path& path)
+{
+    _audioSystem.InvalidateSoundCue(ResolveProjectPath(path));
 }
 
 EditorMode Core::GetEditorMode() const
@@ -858,6 +884,7 @@ void Core::Run() {
         ImGui::Render();
         ImGui::UpdatePlatformWindows();
         ImGui::RenderPlatformWindowsDefault();
+        UpdateEnvironmentSkybox();
         
         Draw();
 
@@ -945,6 +972,90 @@ void Core::SetBenchmarkOptions(BenchmarkOptions options)
 void Core::SetVSyncEnabled(bool enabled)
 {
     _vsyncEnabled = enabled;
+}
+
+bool Core::SetSkyboxPath(const std::filesystem::path& projectPath)
+{
+    const std::string pathString = projectPath.generic_string();
+    if (pathString.empty() || pathString == _activeSkyboxPath) {
+        return true;
+    }
+
+    const std::array<std::string, 6> faceNames {
+        "right.png",
+        "left.png",
+        "top.png",
+        "bottom.png",
+        "front.png",
+        "back.png"
+    };
+
+    std::array<std::filesystem::path, 6> facePaths{};
+    for (std::size_t index = 0; index < faceNames.size(); ++index) {
+        facePaths[index] = projectPath / faceNames[index];
+        if (!std::filesystem::is_regular_file(ResolveProjectPath(facePaths[index]))) {
+            ENGINE_LOG_ERROR("Skybox folder missing face: " + facePaths[index].generic_string());
+            return false;
+        }
+    }
+
+    try {
+        AllocatedImage newSkyboxImage = CreateCubemap(facePaths, true);
+        newSkyboxImage.sampler = _skyboxCubemap.sampler;
+
+        VK_CHECK(vkDeviceWaitIdle(_device));
+        if (_skyboxCubemap.image.image != VK_NULL_HANDLE) {
+            DestroyImage(_skyboxCubemap.image);
+        }
+
+        _skyboxCubemap.image = newSkyboxImage;
+        _skyboxCubemap.mipLevels = newSkyboxImage.mipLevels;
+
+        if (_skyboxCubemap.descriptorSet == VK_NULL_HANDLE) {
+            _skyboxCubemap.descriptorSet =
+                globalDescriptorAllocator.Allocate(_device, _skyboxDescriptorLayout);
+        }
+
+        DescriptorWriter skyboxWriter;
+        skyboxWriter.write_image(
+            0,
+            _skyboxCubemap.image.imageView,
+            _skyboxCubemap.sampler,
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER);
+        skyboxWriter.update_set(_device, _skyboxCubemap.descriptorSet);
+
+        _activeSkyboxPath = pathString;
+        _failedSkyboxPath.clear();
+        ENGINE_LOG_INFO("Loaded skybox: " + pathString);
+        return true;
+    }
+    catch (const std::exception& exception) {
+        ENGINE_LOG_ERROR("Failed to load skybox " + pathString + ": " + exception.what());
+        return false;
+    }
+}
+
+void Core::UpdateEnvironmentSkybox()
+{
+    auto environmentView = _registry.view<EnvironmentComponent>(entt::exclude<DisabledEntityTag>);
+    for (auto entity : environmentView) {
+        if (IsEntityDisabled(_registry, entity)) {
+            continue;
+        }
+
+        const auto& environment = environmentView.get<EnvironmentComponent>(entity);
+        if (environment.skyboxPath.empty() ||
+            environment.skyboxPath == _activeSkyboxPath ||
+            environment.skyboxPath == _failedSkyboxPath) {
+            return;
+        }
+
+        if (!SetSkyboxPath(environment.skyboxPath)) {
+            _failedSkyboxPath = environment.skyboxPath;
+        }
+        return;
+    }
 }
 
 entt::entity Core::ResolveRenderCameraEntity()

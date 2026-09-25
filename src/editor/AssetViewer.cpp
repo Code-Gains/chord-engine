@@ -6,6 +6,7 @@
 #include <imgui_impl_vulkan.h>
 
 #include "MeshComponent.h"
+#include "EnvironmentComponent.h"
 #include "WorldSerializer.h"
 
 #include <algorithm>
@@ -67,10 +68,44 @@ void AssetViewer::DrawUi()
                     SetPrefabPathBuffer(file.projectPath);
                     _overwritePrefabConfirmationActive = false;
                 }
+                else if (file.kind == AssetKind::SoundCue) {
+                    LoadSelectedSoundCue();
+                }
+                else {
+                    _soundCueLoaded = false;
+                    _soundCueDirty = false;
+                }
+            }
+
+            if (file.kind == AssetKind::Skybox && ImGui::BeginDragDropSource()) {
+                ImGui::SetDragDropPayload(
+                    "ENGINE_SKYBOX_ASSET",
+                    projectPath.c_str(),
+                    projectPath.size() + 1);
+                ImGui::TextUnformatted(projectPath.c_str());
+                ImGui::EndDragDropSource();
+            }
+
+            if (file.kind == AssetKind::AudioClip && ImGui::BeginDragDropSource()) {
+                ImGui::SetDragDropPayload(
+                    "ENGINE_AUDIO_CLIP_ASSET",
+                    projectPath.c_str(),
+                    projectPath.size() + 1);
+                ImGui::TextUnformatted(projectPath.c_str());
+                ImGui::EndDragDropSource();
+            }
+
+            if (file.kind == AssetKind::SoundCue && ImGui::BeginDragDropSource()) {
+                ImGui::SetDragDropPayload(
+                    "ENGINE_SOUND_CUE_ASSET",
+                    projectPath.c_str(),
+                    projectPath.size() + 1);
+                ImGui::TextUnformatted(projectPath.c_str());
+                ImGui::EndDragDropSource();
             }
 
             if (ImGui::BeginPopupContextItem("AssetFileContextMenu")) {
-                if (ImGui::MenuItem("Delete File")) {
+                if (file.kind != AssetKind::Skybox && ImGui::MenuItem("Delete File")) {
                     RequestDeleteAsset(file.projectPath);
                 }
                 ImGui::EndPopup();
@@ -175,6 +210,51 @@ void AssetViewer::DrawUi()
                 SetStatus("Copied prefab path " + _selectedAssetFile, true);
             }
         }
+        else if (_selectedAssetKind == AssetKind::Skybox)
+        {
+            ImGui::Text("Skybox: %s", _selectedAssetFile.c_str());
+            ImGui::Separator();
+
+            if (ImGui::Button("Assign to Selected Entity")) {
+                AssignSkyboxToSelectedEntity(_selectedAssetFile);
+            }
+
+            ImGui::SameLine();
+            if (ImGui::Button("Copy Path##CopySkyboxPath")) {
+                ImGui::SetClipboardText(_selectedAssetFile.c_str());
+                SetStatus("Copied skybox path " + _selectedAssetFile, true);
+            }
+
+            ImGui::TextDisabled("Drag this skybox onto an Environment component slot.");
+        }
+        else if (_selectedAssetKind == AssetKind::AudioClip)
+        {
+            ImGui::Text("Audio Clip: %s", _selectedAssetFile.c_str());
+            if (ImGui::Button("Preview")) {
+                if (_core->PlayProjectAudioOneShot(_selectedAssetFile)) {
+                    SetStatus("Playing " + _selectedAssetFile, true);
+                }
+                else {
+                    SetStatus("Failed to play " + _selectedAssetFile, false);
+                }
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Create Sound Cue")) {
+                CreateSoundCueFromClip(_selectedAssetFile);
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Copy Path##CopyAudioClipPath")) {
+                ImGui::SetClipboardText(_selectedAssetFile.c_str());
+                SetStatus("Copied audio clip path " + _selectedAssetFile, true);
+            }
+
+            ImGui::Separator();
+            ImGui::TextDisabled("Drag this WAV into a Sound Cue clip list.");
+        }
+        else if (_selectedAssetKind == AssetKind::SoundCue)
+        {
+            DrawSoundCueEditor();
+        }
 
         ImGui::EndChild();
 
@@ -230,6 +310,17 @@ void AssetViewer::RefreshAssetList(bool updateStatus)
 
     for (const auto& entry : std::filesystem::recursive_directory_iterator(assetsPath))
     {
+        if (entry.is_directory() && IsSkyboxFolder(entry.path())) {
+            const auto projectPath = _core->MakeProjectRelative(entry.path());
+            const auto projectPathString = projectPath.generic_string();
+            _assetFiles.push_back(AssetFileEntry {
+                AssetKind::Skybox,
+                projectPath,
+                "[Skybox] " + projectPathString
+            });
+            continue;
+        }
+
         if (!entry.is_regular_file())
             continue;
 
@@ -251,6 +342,14 @@ void AssetViewer::RefreshAssetList(bool updateStatus)
         else if (extension == ".json" && projectPathString.starts_with("assets/prefabs/")) {
             kind = AssetKind::Prefab;
             displayPrefix = "[Prefab] ";
+        }
+        else if (extension == ".wav") {
+            kind = AssetKind::AudioClip;
+            displayPrefix = "[Audio] ";
+        }
+        else if (extension == ".json" && projectPathString.starts_with("assets/audio/cues/")) {
+            kind = AssetKind::SoundCue;
+            displayPrefix = "[Sound Cue] ";
         }
         else {
             continue;
@@ -319,6 +418,179 @@ void AssetViewer::AssignMeshToSelectedEntity(const std::shared_ptr<MeshAsset>& m
     SetStatus("Assigned mesh " +
         (mesh->name.empty() ? std::to_string(mesh->source.meshIndex) : mesh->name) +
         " to selected entity.", true);
+}
+
+void AssetViewer::AssignSkyboxToSelectedEntity(const std::filesystem::path& projectPath)
+{
+    if (!_core || !_registryViewerPtr) {
+        return;
+    }
+
+    auto selectedEntity = _registryViewerPtr->GetSelectedEntity();
+
+    if (selectedEntity == entt::null || !_registry.valid(selectedEntity)) {
+        SetStatus("No entity selected.", false);
+        return;
+    }
+
+    auto& environment = _registry.get_or_emplace<EnvironmentComponent>(selectedEntity);
+    environment.skyboxPath = projectPath.generic_string();
+
+    if (_core->SetSkyboxPath(environment.skyboxPath)) {
+        SetStatus("Assigned skybox " + environment.skyboxPath + " to selected entity.", true);
+    }
+    else {
+        SetStatus("Assigned skybox path, but failed to load " + environment.skyboxPath, false);
+    }
+}
+
+void AssetViewer::CreateSoundCueFromClip(const std::filesystem::path& clipPath)
+{
+    if (!_core) {
+        return;
+    }
+
+    const std::filesystem::path cueDirectory = "assets/audio/cues";
+    const std::string stem = clipPath.stem().string();
+    std::filesystem::path cuePath = cueDirectory / (stem + ".json");
+    for (int suffix = 2; std::filesystem::exists(_core->ResolveProjectPath(cuePath)); ++suffix) {
+        cuePath = cueDirectory / (stem + "-" + std::to_string(suffix) + ".json");
+    }
+
+    SoundCueAsset cue;
+    cue.clips.push_back(clipPath);
+
+    std::string errorMessage;
+    if (!SaveSoundCueAsset(_core->ResolveProjectPath(cuePath), cue, &errorMessage)) {
+        SetStatus("Failed to create sound cue: " + errorMessage, false);
+        return;
+    }
+
+    _selectedAssetFile = cuePath.generic_string();
+    _selectedAssetKind = AssetKind::SoundCue;
+    _core->InvalidateProjectSoundCue(cuePath);
+    RefreshAssetList(false);
+    LoadSelectedSoundCue();
+    SetStatus("Created sound cue " + _selectedAssetFile, true);
+}
+
+void AssetViewer::LoadSelectedSoundCue()
+{
+    _soundCueLoaded = false;
+    _soundCueDirty = false;
+    if (!_core || _selectedAssetFile.empty()) {
+        return;
+    }
+
+    std::string errorMessage;
+    auto cue = LoadSoundCueAsset(
+        _core->ResolveProjectPath(_selectedAssetFile),
+        &errorMessage);
+    if (!cue) {
+        SetStatus("Failed to load sound cue: " + errorMessage, false);
+        return;
+    }
+
+    _editedSoundCue = std::move(*cue);
+    _soundCueLoaded = true;
+}
+
+void AssetViewer::SaveSelectedSoundCue()
+{
+    if (!_core || !_soundCueLoaded || _selectedAssetFile.empty()) {
+        return;
+    }
+    if (_editedSoundCue.clips.empty()) {
+        SetStatus("A sound cue needs at least one clip.", false);
+        return;
+    }
+
+    std::string errorMessage;
+    if (!SaveSoundCueAsset(
+            _core->ResolveProjectPath(_selectedAssetFile),
+            _editedSoundCue,
+            &errorMessage)) {
+        SetStatus("Failed to save sound cue: " + errorMessage, false);
+        return;
+    }
+
+    _core->InvalidateProjectSoundCue(_selectedAssetFile);
+    _soundCueDirty = false;
+    SetStatus("Saved sound cue " + _selectedAssetFile, true);
+}
+
+void AssetViewer::DrawSoundCueEditor()
+{
+    ImGui::Text("Sound Cue: %s", _selectedAssetFile.c_str());
+    if (!_soundCueLoaded) {
+        ImGui::TextDisabled("Sound cue could not be loaded.");
+        return;
+    }
+
+    if (ImGui::Button("Preview")) {
+        if (_soundCueDirty) {
+            SaveSelectedSoundCue();
+        }
+        if (!_soundCueDirty && !_core->PlayProjectSoundCue(_selectedAssetFile)) {
+            SetStatus("Failed to preview sound cue " + _selectedAssetFile, false);
+        }
+    }
+    ImGui::SameLine();
+    if (ImGui::Button(_soundCueDirty ? "Save *" : "Save")) {
+        SaveSelectedSoundCue();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Copy Path##CopySoundCuePath")) {
+        ImGui::SetClipboardText(_selectedAssetFile.c_str());
+        SetStatus("Copied sound cue path " + _selectedAssetFile, true);
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Delete File##DeleteSelectedSoundCue")) {
+        RequestDeleteAsset(_selectedAssetFile);
+    }
+
+    ImGui::Separator();
+
+    int selectionMode = static_cast<int>(_editedSoundCue.selectionMode);
+    constexpr const char* selectionModes[] { "Random", "Sequential" };
+    if (ImGui::Combo("Selection", &selectionMode, selectionModes, 2)) {
+        _editedSoundCue.selectionMode = static_cast<SoundCueSelectionMode>(selectionMode);
+        _soundCueDirty = true;
+    }
+
+    _soundCueDirty |= ImGui::DragFloat("Gain", &_editedSoundCue.gain, 0.01f, 0.0f, 4.0f);
+    _soundCueDirty |= ImGui::DragFloat("Gain Variation", &_editedSoundCue.gainVariation, 0.01f, 0.0f, 4.0f);
+    _soundCueDirty |= ImGui::DragFloat("Pitch", &_editedSoundCue.pitch, 0.01f, 0.01f, 4.0f);
+    _soundCueDirty |= ImGui::DragFloat("Pitch Variation", &_editedSoundCue.pitchVariation, 0.01f, 0.0f, 4.0f);
+    _soundCueDirty |= ImGui::DragFloat("Cooldown", &_editedSoundCue.cooldown, 0.01f, 0.0f, 60.0f);
+
+    ImGui::SeparatorText("Clips");
+    for (std::size_t index = 0; index < _editedSoundCue.clips.size();) {
+        ImGui::PushID(static_cast<int>(index));
+        if (ImGui::SmallButton("X")) {
+            _editedSoundCue.clips.erase(_editedSoundCue.clips.begin() + index);
+            _soundCueDirty = true;
+            ImGui::PopID();
+            continue;
+        }
+        ImGui::SameLine();
+        ImGui::TextWrapped("%s", _editedSoundCue.clips[index].generic_string().c_str());
+        ImGui::PopID();
+        ++index;
+    }
+
+    ImGui::Button("Drop WAV Here", ImVec2(-1.0f, 0.0f));
+    if (ImGui::BeginDragDropTarget()) {
+        if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("ENGINE_AUDIO_CLIP_ASSET")) {
+            std::filesystem::path clipPath{ static_cast<const char*>(payload->Data) };
+            if (std::find(_editedSoundCue.clips.begin(), _editedSoundCue.clips.end(), clipPath) ==
+                _editedSoundCue.clips.end()) {
+                _editedSoundCue.clips.push_back(std::move(clipPath));
+                _soundCueDirty = true;
+            }
+        }
+        ImGui::EndDragDropTarget();
+    }
 }
 
 void AssetViewer::LoadSelectedWorld()
@@ -508,6 +780,26 @@ bool AssetViewer::IsProjectAssetPath(const std::filesystem::path& projectPath) c
 {
     const auto path = projectPath.generic_string();
     return path == "assets" || path.starts_with("assets/");
+}
+
+bool AssetViewer::IsSkyboxFolder(const std::filesystem::path& path) const
+{
+    static constexpr std::array<std::string_view, 6> faceNames {
+        "right.png",
+        "left.png",
+        "top.png",
+        "bottom.png",
+        "front.png",
+        "back.png"
+    };
+
+    for (const auto faceName : faceNames) {
+        if (!std::filesystem::is_regular_file(path / faceName)) {
+            return false;
+        }
+    }
+
+    return true;
 }
 
 void AssetViewer::SetPrefabPathBuffer(const std::filesystem::path& projectPath)

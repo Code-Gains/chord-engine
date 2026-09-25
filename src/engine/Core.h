@@ -457,6 +457,7 @@ private:
     bool DrawScreenPostProcessMask(VkCommandBuffer cmd, const glm::mat4& viewProjection);
     void BlurScreenPostProcessMask(VkCommandBuffer cmd, float feather);
     void DrawScreenPostProcess(VkCommandBuffer cmd);
+    void UpdateEnvironmentSkybox();
     glm::mat4 BuildSunLightViewProjection();
     void DrawImGui(VkCommandBuffer cmd, VkImageView targetImageView);
 
@@ -636,8 +637,12 @@ private:
     CubemapAsset _skyboxCubemap;
     CubemapAsset _prefilteredCubemap;
     CubemapAsset _irradianceCubemap;
+    std::string _activeSkyboxPath;
+    std::string _failedSkyboxPath;
 
-    AllocatedImage CreateCubemap(const std::array<std::string, 6>& facePaths);
+    AllocatedImage CreateCubemap(
+        const std::array<std::filesystem::path, 6>& facePaths,
+        bool projectRelative = false);
     AllocatedImage CreateEmptyCubemap(uint32_t size, VkFormat format, uint32_t mipLevels);
 
     void GenerateCubemapMipmaps(VkCommandBuffer cmd, VkImage image, uint32_t width, uint32_t height, uint32_t mipLevels);
@@ -685,6 +690,15 @@ public:
     const std::filesystem::path& GetProjectRoot() const;
     std::filesystem::path ResolveProjectPath(const std::filesystem::path& path) const;
     std::filesystem::path MakeProjectRelative(const std::filesystem::path& path) const;
+    bool PlayProjectAudioOneShot(
+        const std::filesystem::path& path,
+        float gain = 1.0f,
+        float pitch = 1.0f);
+    bool PlayProjectSoundCue(
+        const std::filesystem::path& path,
+        float gainScale = 1.0f,
+        float pitchScale = 1.0f);
+    void InvalidateProjectSoundCue(const std::filesystem::path& path);
 
     EditorMode GetEditorMode() const;
     bool IsPlayMode() const;
@@ -716,6 +730,7 @@ public:
     );
 
     AllocatedImage* LoadUiImage(const std::filesystem::path& path);
+    bool SetSkyboxPath(const std::filesystem::path& projectPath);
 
     // ------------------------------------------------------------------------
     // Shared thread pool access

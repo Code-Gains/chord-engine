@@ -422,13 +422,13 @@ void Core::InitDefaultData()
     );
 
     // Load Cubemap images
-    _skyboxCubemap.image = CreateCubemap({
-        "assets/right.png",
-        "assets/left.png",
-        "assets/top.png",
-        "assets/bottom.png",
-        "assets/front.png",
-        "assets/back.png"
+    _skyboxCubemap.image = CreateCubemap(std::array<std::filesystem::path, 6>{
+        "assets/skyboxes/default/right.png",
+        "assets/skyboxes/default/left.png",
+        "assets/skyboxes/default/top.png",
+        "assets/skyboxes/default/bottom.png",
+        "assets/skyboxes/default/front.png",
+        "assets/skyboxes/default/back.png"
     });
 
     // Prefilter cubemap

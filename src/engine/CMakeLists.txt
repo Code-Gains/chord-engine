@@ -36,6 +36,7 @@ add_library(engine STATIC
     ImGuiManager.cpp
     WorldSerializer.cpp
     AudioSystem.cpp
+    SoundCueAsset.cpp
 )
 
 target_compile_definitions(engine PRIVATE

@@ -4,6 +4,7 @@
 #include "stb_image.h"
 
 #include <imgui_impl_vulkan.h>
+#include <stdexcept>
 
 namespace Engine {
 AllocatedImage Core::CreateImage(VkExtent3D size, VkFormat format, VkImageUsageFlags usage, bool mipmapped, VkSampleCountFlagBits samples)
@@ -219,7 +220,9 @@ AllocatedImage* Core::LoadUiImage(const std::filesystem::path& path)
     return inserted->second.get();
 }
 
-AllocatedImage Core::CreateCubemap(const std::array<std::string, 6>& facePaths)
+AllocatedImage Core::CreateCubemap(
+    const std::array<std::filesystem::path, 6>& facePaths,
+    bool projectRelative)
 {
     int width = 0;
     int height = 0;
@@ -228,7 +231,9 @@ AllocatedImage Core::CreateCubemap(const std::array<std::string, 6>& facePaths)
     std::array<stbi_uc*, 6> faces{};
 
     for (int i = 0; i < 6; i++) {
-        auto resolvedFacePath = ResolveEnginePath(facePaths[i]);
+        auto resolvedFacePath = projectRelative
+            ? ResolveProjectPath(facePaths[i])
+            : ResolveEnginePath(facePaths[i]);
 
         faces[i] = stbi_load(
             resolvedFacePath.string().c_str(),
@@ -239,8 +244,11 @@ AllocatedImage Core::CreateCubemap(const std::array<std::string, 6>& facePaths)
         );
 
         if (!faces[i]) {
-            std::cout << "Failed to load cubemap face: "
-                    << resolvedFacePath << "\n";
+            for (int loadedIndex = 0; loadedIndex < i; ++loadedIndex) {
+                stbi_image_free(faces[loadedIndex]);
+            }
+
+            throw std::runtime_error("Failed to load cubemap face: " + resolvedFacePath.string());
         }
     }
 
