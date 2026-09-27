@@ -394,6 +394,11 @@ void Core::ToggleEditorWireframe()
     _editorWireframeEnabled = !_editorWireframeEnabled;
 }
 
+void Core::SetRetainCpuMeshPickingData(bool enabled)
+{
+    _retainCpuMeshPickingData = enabled;
+}
+
 void Core::StartPlayMode()
 {
     if (_editorMode == EditorMode::Play) {

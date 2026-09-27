@@ -300,6 +300,7 @@ private:
     std::filesystem::path _projectRoot = std::filesystem::current_path();
     EditorMode _editorMode = EditorMode::Edit;
     bool _editorWireframeEnabled = false;
+    bool _retainCpuMeshPickingData = false;
     nlohmann::json _playModeSnapshot;
     std::optional<std::filesystem::path> _currentWorldPath;
     std::vector<std::function<void(ComponentSerializerRegistry&)>> _componentSerializerSetups;
@@ -707,6 +708,7 @@ public:
     bool IsEditorWireframeEnabled() const;
     void SetEditorWireframeEnabled(bool enabled);
     void ToggleEditorWireframe();
+    void SetRetainCpuMeshPickingData(bool enabled);
     const std::optional<std::filesystem::path>& GetCurrentWorldPath() const;
     void SetCurrentWorldPath(std::filesystem::path path);
     void ClearCurrentWorldPath();

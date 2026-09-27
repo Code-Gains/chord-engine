@@ -30,7 +30,7 @@ Transform TransformFromMatrix(const glm::mat4& matrix)
         perspective
     );
 
-    transform.rotation = glm::normalize(glm::conjugate(transform.rotation));
+    transform.rotation = glm::normalize(transform.rotation);
     return transform;
 }
 

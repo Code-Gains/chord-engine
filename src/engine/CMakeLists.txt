@@ -41,6 +41,9 @@ add_library(engine STATIC
 
 target_compile_definitions(engine PRIVATE
     $<$<CONFIG:Debug>:DEBUG>
+)
+
+target_compile_definitions(engine PUBLIC
     GLM_FORCE_DEPTH_ZERO_TO_ONE
 )
 

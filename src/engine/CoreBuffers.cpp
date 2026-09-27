@@ -118,6 +118,14 @@ std::shared_ptr<MeshAsset> Core::CreateRuntimeMesh(
         glm::length(maxPosition - mesh->boundsCenter),
         0.01f);
 
+    if (_retainCpuMeshPickingData) {
+        mesh->pickingPositions.reserve(vertices.size());
+        for (const auto& vertex : vertices) {
+            mesh->pickingPositions.push_back(vertex.position);
+        }
+        mesh->pickingIndices.assign(indices.begin(), indices.end());
+    }
+
     mesh->meshBuffers = UploadMesh(indices, vertices);
 
     auto vertexBuffer = mesh->meshBuffers.vertexBuffer;

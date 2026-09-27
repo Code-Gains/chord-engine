@@ -4,19 +4,135 @@
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_vulkan.h>
 #include "Core.h"
+#include "Camera.h"
 #include "EditorSelection.h"
+#include "EditorInteractionState.h"
 #include "EntityState.h"
 #include "InputSystem.h"
+#include "MeshComponent.h"
 #include "NameComponent.h"
+#include "Transform.h"
 #include "HierarchyComponent.h"
 #include "HierarchySystem.h"
 #include "WorldSerializer.h"
 #include <ImGuiWindowRegistry.h>
 #include <cctype>
+#include <algorithm>
+#include <cmath>
 #include <cstdint>
+#include <limits>
 #include <vector>
 
+#include <glm/gtc/matrix_inverse.hpp>
+
 namespace {
+    bool IntersectRaySphere(
+        const glm::vec3& rayOrigin,
+        const glm::vec3& rayDirection,
+        const glm::vec3& center,
+        float radius,
+        float& distance)
+    {
+        const glm::vec3 offset = rayOrigin - center;
+        const float projectedOffset = glm::dot(offset, rayDirection);
+        const float discriminant =
+            projectedOffset * projectedOffset -
+            (glm::dot(offset, offset) - radius * radius);
+        if (discriminant < 0.0f) {
+            return false;
+        }
+
+        const float root = std::sqrt(discriminant);
+        distance = -projectedOffset - root;
+        if (distance < 0.0f) {
+            distance = -projectedOffset + root;
+        }
+
+        return distance >= 0.0f;
+    }
+
+    bool IntersectRayTriangles(
+        const glm::vec3& rayOrigin,
+        const glm::vec3& rayDirection,
+        const MeshAsset& mesh,
+        float& nearestDistance)
+    {
+        constexpr double epsilon = 0.000000000001;
+        bool hit = false;
+
+        const glm::dvec3 preciseRayOrigin(rayOrigin);
+        const glm::dvec3 preciseRayDirection(rayDirection);
+
+        for (size_t index = 0; index + 2 < mesh.pickingIndices.size(); index += 3) {
+            const uint32_t index0 = mesh.pickingIndices[index];
+            const uint32_t index1 = mesh.pickingIndices[index + 1];
+            const uint32_t index2 = mesh.pickingIndices[index + 2];
+            if (index0 >= mesh.pickingPositions.size() ||
+                index1 >= mesh.pickingPositions.size() ||
+                index2 >= mesh.pickingPositions.size()) {
+                continue;
+            }
+
+            const glm::dvec3 vertex0(mesh.pickingPositions[index0]);
+            const glm::dvec3 vertex1(mesh.pickingPositions[index1]);
+            const glm::dvec3 vertex2(mesh.pickingPositions[index2]);
+            const glm::dvec3 edge1 = vertex1 - vertex0;
+            const glm::dvec3 edge2 = vertex2 - vertex0;
+            const glm::dvec3 perpendicular = glm::cross(preciseRayDirection, edge2);
+            const double determinant = glm::dot(edge1, perpendicular);
+            if (std::abs(determinant) < epsilon) {
+                continue;
+            }
+
+            const double inverseDeterminant = 1.0 / determinant;
+            const glm::dvec3 originOffset = preciseRayOrigin - vertex0;
+            const double u = glm::dot(originOffset, perpendicular) * inverseDeterminant;
+            if (u < 0.0 || u > 1.0) {
+                continue;
+            }
+
+            const glm::dvec3 crossOffset = glm::cross(originOffset, edge1);
+            const double v = glm::dot(preciseRayDirection, crossOffset) * inverseDeterminant;
+            if (v < 0.0 || u + v > 1.0) {
+                continue;
+            }
+
+            const double distance = glm::dot(edge2, crossOffset) * inverseDeterminant;
+            if (distance >= 0.0 && distance < static_cast<double>(nearestDistance)) {
+                nearestDistance = static_cast<float>(distance);
+                hit = true;
+            }
+        }
+
+        return hit;
+    }
+
+    entt::entity ResolveEditorRenderCamera(entt::registry& registry)
+    {
+        auto pilotView = registry.view<Camera, Transform, EditorCameraPilotTag>(
+            entt::exclude<Engine::CoreOwnedTag, DisabledEntityTag>);
+        for (const entt::entity entity : pilotView) {
+            if (!IsEntityDisabled(registry, entity)) {
+                return entity;
+            }
+        }
+
+        auto editorView = registry.view<Camera, Transform, ActiveCameraTag, Engine::CoreOwnedTag>();
+        if (editorView.begin() != editorView.end()) {
+            return *editorView.begin();
+        }
+
+        auto sceneView = registry.view<Camera, Transform, ActiveCameraTag>(
+            entt::exclude<Engine::CoreOwnedTag, DisabledEntityTag>);
+        for (const entt::entity entity : sceneView) {
+            if (!IsEntityDisabled(registry, entity)) {
+                return entity;
+            }
+        }
+
+        return entt::null;
+    }
+
     EditorSelection& GetEditorSelection(entt::registry& registry)
     {
         if (!registry.ctx().contains<EditorSelection>()) {
@@ -165,6 +281,101 @@ void RegistryViewer::DrawUi()
     }
 
     const ImGuiIO& io = ImGui::GetIO();
+    const auto* interaction = _registry.ctx().find<EditorInteractionState>();
+    const bool gizmoOwnsMouse = interaction &&
+        (interaction->gizmoHovered || interaction->gizmoUsing);
+    if (_core &&
+        !_core->IsPlayMode() &&
+        !io.WantCaptureMouse &&
+        !gizmoOwnsMouse &&
+        io.DisplaySize.x > 0.0f &&
+        io.DisplaySize.y > 0.0f &&
+        ImGui::IsMouseClicked(ImGuiMouseButton_Left, false)) {
+        const entt::entity cameraEntity = ResolveEditorRenderCamera(_registry);
+        if (cameraEntity != entt::null) {
+            const auto& camera = _registry.get<Camera>(cameraEntity);
+            const auto& cameraTransform = _registry.get<Transform>(cameraEntity);
+            const float aspectRatio = io.DisplaySize.x / io.DisplaySize.y;
+            const glm::mat4 viewMatrix = camera.GetViewMatrix(cameraTransform);
+            const glm::mat4 projectionMatrix = camera.GetProjectionMatrix(aspectRatio);
+            const glm::mat4 inverseViewProjection = glm::inverse(
+                projectionMatrix * viewMatrix);
+            const float ndcX = (2.0f * io.MousePos.x / io.DisplaySize.x) - 1.0f;
+            const float ndcY = (2.0f * io.MousePos.y / io.DisplaySize.y) - 1.0f;
+            glm::vec4 nearPoint = inverseViewProjection * glm::vec4(ndcX, ndcY, 1.0f, 1.0f);
+            glm::vec4 farPoint = inverseViewProjection * glm::vec4(ndcX, ndcY, 0.0f, 1.0f);
+
+            if (std::abs(nearPoint.w) > 0.000001f &&
+                std::abs(farPoint.w) > 0.000001f) {
+                nearPoint /= nearPoint.w;
+                farPoint /= farPoint.w;
+                const glm::vec3 rayOrigin = glm::vec3(nearPoint);
+                const glm::vec3 rayVector = glm::vec3(farPoint - nearPoint);
+                const float rayLengthSquared = glm::dot(rayVector, rayVector);
+                if (rayLengthSquared > 0.000001f) {
+                    const glm::vec3 rayDirection =
+                        rayVector / std::sqrt(rayLengthSquared);
+
+                    entt::entity nearestEntity = entt::null;
+                    float nearestDistance = std::numeric_limits<float>::max();
+                    auto meshView = _registry.view<MeshComponent, Transform>(
+                        entt::exclude<DisabledEntityTag, EffectMeshComponent, Engine::CoreOwnedTag>);
+
+                    for (const entt::entity entity : meshView) {
+                        if (IsEntityDisabled(_registry, entity)) {
+                            continue;
+                        }
+
+                        const auto& mesh = meshView.get<MeshComponent>(entity);
+                        if (!mesh.mesh) {
+                            continue;
+                        }
+
+                        const auto& transform = meshView.get<Transform>(entity);
+                        const glm::vec3 absoluteScale = glm::abs(transform.scale);
+                        const float maximumScale = std::max({
+                            absoluteScale.x,
+                            absoluteScale.y,
+                            absoluteScale.z
+                        });
+                        const glm::vec3 worldCenter =
+                            transform.position +
+                            transform.rotation * (mesh.mesh->boundsCenter * transform.scale);
+                        const float worldRadius = std::max(
+                            mesh.mesh->boundsRadius * maximumScale,
+                            0.0001f);
+
+                        float hitDistance = 0.0f;
+                        if (IntersectRaySphere(
+                                rayOrigin,
+                                rayDirection,
+                                worldCenter,
+                                worldRadius,
+                                hitDistance) &&
+                            !mesh.mesh->pickingIndices.empty()) {
+                            const glm::mat4 inverseModel = glm::inverse(transform.GetModelMatrix());
+                            const glm::vec3 localRayOrigin = glm::vec3(
+                                inverseModel * glm::vec4(rayOrigin, 1.0f));
+                            const glm::vec3 localRayDirection = glm::vec3(
+                                inverseModel * glm::vec4(rayDirection, 0.0f));
+                            float triangleDistance = nearestDistance;
+                            if (IntersectRayTriangles(
+                                    localRayOrigin,
+                                    localRayDirection,
+                                    *mesh.mesh,
+                                    triangleDistance)) {
+                                nearestDistance = triangleDistance;
+                                nearestEntity = entity;
+                            }
+                        }
+                    }
+
+                    SetSelectedEntity(nearestEntity);
+                }
+            }
+        }
+    }
+
     if (!io.WantTextInput && !ImGui::IsAnyItemActive()) {
         if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_C, false)) {
             CopySelectedEntity();

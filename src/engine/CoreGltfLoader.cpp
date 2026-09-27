@@ -371,6 +371,14 @@ std::vector<std::shared_ptr<MeshAsset>> Core::LoadGltfMeshAssets(Core *engine, f
                 glm::length(maxPosition - newMesh.boundsCenter),
                 0.01f);
 
+            if (_retainCpuMeshPickingData) {
+                newMesh.pickingPositions.reserve(vertices.size());
+                for (const auto& vertex : vertices) {
+                    newMesh.pickingPositions.push_back(vertex.position);
+                }
+                newMesh.pickingIndices = indices;
+            }
+
             newMesh.meshBuffers = engine->UploadMesh(indices, vertices);
 
             auto vertexBuffer = newMesh.meshBuffers.vertexBuffer;

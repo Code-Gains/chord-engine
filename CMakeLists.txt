@@ -111,6 +111,33 @@ target_link_libraries(imgui PUBLIC
 )
 
 # ---------------------
+# ImGuizmo
+# ---------------------
+FetchContent_Declare(
+    imguizmo
+    GIT_REPOSITORY https://github.com/CedricGuillemet/ImGuizmo.git
+    GIT_TAG 18cef5e031d8c6973d80284c67f60549fafd78c1
+    GIT_SHALLOW FALSE
+)
+
+FetchContent_GetProperties(imguizmo)
+
+if(NOT imguizmo_POPULATED)
+    message(STATUS "Cloning ImGuizmo 18cef5e...")
+    FetchContent_Populate(imguizmo)
+endif()
+
+add_library(imguizmo STATIC
+    ${imguizmo_SOURCE_DIR}/src/ImGuizmo.cpp
+)
+
+target_include_directories(imguizmo PUBLIC
+    ${imguizmo_SOURCE_DIR}/src
+)
+
+target_link_libraries(imguizmo PUBLIC imgui)
+
+# ---------------------
 # fastgltf
 # ---------------------
 FetchContent_Declare(

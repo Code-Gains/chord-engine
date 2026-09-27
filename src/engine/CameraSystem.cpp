@@ -3,6 +3,7 @@
 #include "Camera.h"
 #include "Core.h"
 #include "EditorSelection.h"
+#include "EditorInteractionState.h"
 
 #include <algorithm>
 #include <cmath>
@@ -227,8 +228,17 @@ void CameraSystem::Update(float deltaTime)
     auto inputEntity = *inputView.begin();
     auto& input = inputView.get<InputState>(inputEntity);
     const ImGuiIO& io = ImGui::GetIO();
-    const bool mouseControlsAllowed = !io.WantCaptureMouse;
+    const auto* interaction = _registry.ctx().find<EditorInteractionState>();
+    const bool gizmoOwnsMouse = interaction &&
+        (interaction->gizmoHovered || interaction->gizmoUsing);
+    const bool mouseControlsAllowed = !io.WantCaptureMouse && !gizmoOwnsMouse;
     const bool keyboardShortcutsAllowed = !io.WantCaptureKeyboard;
+    if (auto* mutableInteraction = _registry.ctx().find<EditorInteractionState>()) {
+        mutableInteraction->cameraNavigating =
+            mouseControlsAllowed &&
+            (input.mouseButtons[GLFW_MOUSE_BUTTON_RIGHT].held ||
+             input.mouseButtons[GLFW_MOUSE_BUTTON_MIDDLE].held);
+    }
 
     auto pilotCameraView =
         _registry.view<Camera, Transform, EditorCameraPilotTag>(entt::exclude<Engine::CoreOwnedTag>);

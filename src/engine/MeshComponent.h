@@ -26,6 +26,8 @@ struct MeshAsset {
 
     std::vector<GeoSurface> surfaces;
     GPUMeshBuffers meshBuffers;
+    std::vector<glm::vec3> pickingPositions;
+    std::vector<uint32_t> pickingIndices;
     glm::vec3 boundsCenter{0.0f};
     float boundsRadius = 1.0f;
 };

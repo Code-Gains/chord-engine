@@ -6,6 +6,7 @@ add_library(editor_tools STATIC
     AnimationEditor.cpp
     CameraShotEditorUi.cpp
     JoltColliderDebugDrawSystem.cpp
+    ViewportGizmoSystem.cpp
 )
 
 target_include_directories(editor_tools
@@ -20,6 +21,7 @@ target_link_libraries(editor_tools
     PUBLIC
         engine
         imgui
+        imguizmo
 )
 
 add_executable(editor

@@ -124,6 +124,8 @@ public:
 class TransformComponentUi : public ViewerComponentUi {
 public:
     glm::vec3 rotationEulerDegrees{0.0f};
+    entt::entity rotationEntity{entt::null};
+    bool rotationEditing = false;
 
     void Draw(entt::registry& registry, entt::entity entity) override {
         auto* transform = registry.try_get<Transform>(entity);
@@ -140,6 +142,11 @@ public:
             EditorUi::ScopedItemWidth width{ 240.0f };
             ImGui::DragFloat3("Position", &transform->position.x, 0.1f);
 
+            if (rotationEntity != entity || !rotationEditing) {
+                rotationEulerDegrees = glm::degrees(glm::eulerAngles(transform->rotation));
+                rotationEntity = entity;
+            }
+
             if (ImGui::DragFloat3("Rotation", &rotationEulerDegrees.x, 0.1f))
             {
                 glm::vec3 radians = glm::radians(rotationEulerDegrees);
@@ -147,6 +154,7 @@ public:
                 transform->rotation =
                     glm::normalize(glm::quat(radians));
             }
+            rotationEditing = ImGui::IsItemActive();
 
             ImGui::DragFloat3("Scale", &transform->scale.x, 0.1f);
         }

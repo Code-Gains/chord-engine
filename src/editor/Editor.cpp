@@ -9,6 +9,7 @@
 #include "AssetViewer.h"
 #include "AnimationEditor.h"
 #include "JoltColliderDebugDrawSystem.h"
+#include "ViewportGizmoSystem.h"
 #include "NameComponent.h"
 #include "SunlightComponent.h"
 
@@ -17,6 +18,7 @@ int main() {
     Engine::Core core;
     core.SetEngineRoot("../../..");
     core.SetProjectRoot("../../..");
+    core.SetRetainCpuMeshPickingData(true);
     core.Init();
 
     std::vector<std::shared_ptr<MeshAsset>> meshes;
@@ -32,6 +34,8 @@ int main() {
     registry.emplace<NameComponent>(editorCameraEntity, "Editor Camera");
 
     core._systems.push_back(std::make_unique<ImGuiManager>(registry, &core));
+
+    core._systems.push_back(std::make_unique<ViewportGizmoSystem>(registry, core));
 
     auto registryViewer = std::make_unique<RegistryViewer>(registry, &core);
     auto* registryViewerPtr = registryViewer.get();
