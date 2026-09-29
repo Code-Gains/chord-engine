@@ -177,6 +177,10 @@ const char* JoltColliderShapeToString(JoltColliderShape shape)
         return "Box";
     case JoltColliderShape::Capsule:
         return "Capsule";
+    case JoltColliderShape::Cylinder:
+        return "Cylinder";
+    case JoltColliderShape::Compound:
+        return "Compound";
     default:
         return "Sphere";
     }
@@ -190,6 +194,14 @@ JoltColliderShape JoltColliderShapeFromString(const std::string& value)
 
     if (value == "Capsule") {
         return JoltColliderShape::Capsule;
+    }
+
+    if (value == "Cylinder") {
+        return JoltColliderShape::Cylinder;
+    }
+
+    if (value == "Compound") {
+        return JoltColliderShape::Compound;
     }
 
     return JoltColliderShape::Sphere;
@@ -465,6 +477,29 @@ void ComponentSerializerRegistry::LoadComponent(
     ENGINE_LOG_WARN("No component serializer registered for: " + component.type);
 }
 
+void ComponentSerializerRegistry::ClearComponents(
+    entt::registry& registry,
+    entt::entity entity) const
+{
+    for (const auto& serializer : _serializers) {
+        serializer.remove(registry, entity);
+    }
+}
+
+bool ComponentSerializerRegistry::RemoveComponent(
+    entt::registry& registry,
+    entt::entity entity,
+    std::string_view type) const
+{
+    for (const auto& serializer : _serializers) {
+        if (serializer.type == type) {
+            serializer.remove(registry, entity);
+            return true;
+        }
+    }
+    return false;
+}
+
 WorldSerializer::WorldSerializer()
 {
     RegisterDefaultComponentSerializers();
@@ -578,6 +613,78 @@ entt::entity WorldSerializer::InstantiateEntity(
     const Serialization::SerializedEntity& entity) const
 {
     return ApplyEntity(core, entity);
+}
+
+bool WorldSerializer::RestoreEntity(
+    Core& core,
+    const Serialization::SerializedEntity& serializedEntity) const
+{
+    auto& registry = core.GetRegistry();
+    const entt::entity entity = EntityFromSerializedId(serializedEntity.id);
+    if (!registry.valid(entity) || registry.all_of<CoreOwnedTag>(entity)) {
+        return false;
+    }
+
+    _componentSerializers.ClearComponents(registry, entity);
+    for (const auto& component : serializedEntity.components) {
+        _componentSerializers.LoadComponent(core, registry, entity, component);
+    }
+    return true;
+}
+
+bool WorldSerializer::RestoreComponent(
+    Core& core,
+    entt::entity entity,
+    const Serialization::SerializedComponent& component) const
+{
+    auto& registry = core.GetRegistry();
+    if (!registry.valid(entity) || registry.all_of<CoreOwnedTag>(entity)) {
+        return false;
+    }
+
+    _componentSerializers.LoadComponent(core, registry, entity, component);
+    return true;
+}
+
+bool WorldSerializer::RemoveComponent(
+    Core& core,
+    entt::entity entity,
+    std::string_view type) const
+{
+    auto& registry = core.GetRegistry();
+    if (!registry.valid(entity) || registry.all_of<CoreOwnedTag>(entity)) {
+        return false;
+    }
+    return _componentSerializers.RemoveComponent(registry, entity, type);
+}
+
+std::optional<Serialization::SerializedEntityHierarchy> WorldSerializer::SerializeEntityHierarchy(
+    Core& core,
+    entt::entity root) const
+{
+    auto entities = CaptureEntityHierarchy(core, root);
+    if (entities.empty()) {
+        return std::nullopt;
+    }
+
+    return Serialization::SerializedEntityHierarchy {
+        static_cast<uint64_t>(entt::to_integral(root)),
+        std::move(entities)
+    };
+}
+
+std::optional<entt::entity> WorldSerializer::InstantiateEntityHierarchy(
+    Core& core,
+    const Serialization::SerializedEntityHierarchy& hierarchy,
+    bool preserveSerializedIds,
+    bool preserveExternalParent) const
+{
+    return ApplyPrefab(
+        core,
+        hierarchy.rootId,
+        hierarchy.entities,
+        preserveSerializedIds,
+        preserveExternalParent);
 }
 
 nlohmann::json WorldSerializer::SaveWorldToJson(Core& core) const
@@ -747,7 +854,9 @@ entt::entity WorldSerializer::ApplyEntity(
 std::optional<entt::entity> WorldSerializer::ApplyPrefab(
     Core& core,
     uint64_t rootId,
-    const std::vector<Serialization::SerializedEntity>& entities) const
+    const std::vector<Serialization::SerializedEntity>& entities,
+    bool preserveSerializedIds,
+    bool preserveExternalParent) const
 {
     if (entities.empty()) {
         return std::nullopt;
@@ -758,7 +867,16 @@ std::optional<entt::entity> WorldSerializer::ApplyPrefab(
     std::optional<entt::entity> rootEntity;
 
     for (const auto& serializedEntity : entities) {
-        const entt::entity entity = registry.create();
+        entt::entity entity = entt::null;
+        if (preserveSerializedIds && serializedEntity.id != 0) {
+            const entt::entity preferredEntity = EntityFromSerializedId(serializedEntity.id);
+            entity = registry.valid(preferredEntity)
+                ? registry.create()
+                : registry.create(preferredEntity);
+        }
+        else {
+            entity = registry.create();
+        }
         remappedEntities[serializedEntity.id] = entity;
         if (serializedEntity.id == rootId) {
             rootEntity = entity;
@@ -784,9 +902,13 @@ std::optional<entt::entity> WorldSerializer::ApplyPrefab(
 
         const uint64_t serializedParentId = static_cast<uint64_t>(entt::to_integral(hierarchy->parent));
         const auto parentIt = remappedEntities.find(serializedParentId);
-        hierarchy->parent = parentIt == remappedEntities.end()
-            ? entt::null
-            : parentIt->second;
+        if (parentIt != remappedEntities.end()) {
+            hierarchy->parent = parentIt->second;
+        }
+        else if ((!preserveSerializedIds && !preserveExternalParent) ||
+            !registry.valid(hierarchy->parent)) {
+            hierarchy->parent = entt::null;
+        }
     }
 
     return rootEntity;
@@ -1295,6 +1417,7 @@ void WorldSerializer::RegisterDefaultComponentSerializers()
                 {"radius", collider.radius},
                 {"halfExtents", Vec3ToJson(collider.halfExtents)},
                 {"capsuleHalfHeight", collider.capsuleHalfHeight},
+                {"cylinderHalfHeight", collider.cylinderHalfHeight},
                 {"friction", collider.friction},
                 {"restitution", collider.restitution}
             };
@@ -1312,6 +1435,7 @@ void WorldSerializer::RegisterDefaultComponentSerializers()
                 ? Vec3FromJson(data.at("halfExtents"))
                 : glm::vec3{ 0.5f };
             collider.capsuleHalfHeight = data.value("capsuleHalfHeight", 0.5f);
+            collider.cylinderHalfHeight = data.value("cylinderHalfHeight", 0.5f);
             collider.friction = data.value("friction", 0.2f);
             collider.restitution = data.value("restitution", 0.0f);
             return collider;

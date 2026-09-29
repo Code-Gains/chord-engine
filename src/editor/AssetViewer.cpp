@@ -1,4 +1,5 @@
 #include "AssetViewer.h"
+#include "EditorHistory.h"
 
 #include <ImGuiWindowRegistry.h>
 #include <imgui.h>
@@ -622,6 +623,16 @@ void AssetViewer::InstantiateSelectedPrefab()
     auto entity = serializer.InstantiatePrefab(*_core, prefabPath);
 
     if (entity.has_value()) {
+        if (auto hierarchy = serializer.SerializeEntityHierarchy(*_core, entity.value())) {
+            auto& history = GetEditorHistory(_registry);
+            history.PushEntityLifecycle(EditorEntityLifecycleCommand {
+                std::move(*hierarchy),
+                false,
+                true,
+                "Instantiate " + _selectedAssetFile
+            });
+        }
+
         if (_registryViewerPtr) {
             _registryViewerPtr->SetSelectedEntity(entity.value());
         }

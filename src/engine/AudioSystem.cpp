@@ -249,38 +249,9 @@ bool AudioSystem::PlayWavOneShot(
         return false;
     }
 
-    const std::string cacheKey = path.lexically_normal().generic_string();
-    if (failedWavPaths_.contains(cacheKey)) {
+    const ALuint buffer = GetOrLoadWavBuffer(path);
+    if (buffer == 0) {
         return false;
-    }
-
-    ALuint buffer = 0;
-    if (const auto bufferIt = wavBuffers_.find(cacheKey); bufferIt != wavBuffers_.end()) {
-        buffer = bufferIt->second;
-    }
-    else {
-        const auto wav = LoadWavFile(path);
-        if (!wav) {
-            ENGINE_LOG_ERROR("Failed to load WAV audio: " + cacheKey);
-            failedWavPaths_.insert(cacheKey);
-            return false;
-        }
-
-        alGenBuffers(1, &buffer);
-        alBufferData(
-            buffer,
-            wav->format,
-            wav->samples.data(),
-            static_cast<ALsizei>(wav->samples.size() * sizeof(int16_t)),
-            wav->sampleRate);
-        if (alGetError() != AL_NO_ERROR) {
-            alDeleteBuffers(1, &buffer);
-            ENGINE_LOG_ERROR("OpenAL failed to create WAV buffer: " + cacheKey);
-            failedWavPaths_.insert(cacheKey);
-            return false;
-        }
-
-        wavBuffers_.emplace(cacheKey, buffer);
     }
 
     ALuint source = 0;
@@ -296,6 +267,104 @@ bool AudioSystem::PlayWavOneShot(
 
     sources_.push_back(ActiveSource{ source, 0 });
     return true;
+}
+
+ALuint AudioSystem::GetOrLoadWavBuffer(const std::filesystem::path& path)
+{
+    const std::string cacheKey = path.lexically_normal().generic_string();
+    if (failedWavPaths_.contains(cacheKey)) {
+        return 0;
+    }
+
+    if (const auto bufferIt = wavBuffers_.find(cacheKey); bufferIt != wavBuffers_.end()) {
+        return bufferIt->second;
+    }
+
+    const auto wav = LoadWavFile(path);
+    if (!wav) {
+        ENGINE_LOG_ERROR("Failed to load WAV audio: " + cacheKey);
+        failedWavPaths_.insert(cacheKey);
+        return 0;
+    }
+
+    ALuint buffer = 0;
+    alGenBuffers(1, &buffer);
+    alBufferData(
+        buffer,
+        wav->format,
+        wav->samples.data(),
+        static_cast<ALsizei>(wav->samples.size() * sizeof(int16_t)),
+        wav->sampleRate);
+    if (alGetError() != AL_NO_ERROR) {
+        alDeleteBuffers(1, &buffer);
+        ENGINE_LOG_ERROR("OpenAL failed to create WAV buffer: " + cacheKey);
+        failedWavPaths_.insert(cacheKey);
+        return 0;
+    }
+
+    wavBuffers_.emplace(cacheKey, buffer);
+    return buffer;
+}
+
+AudioLoopHandle AudioSystem::StartWavLoop(
+    const std::filesystem::path& path,
+    float gain,
+    float pitch)
+{
+    if (!initialized_) {
+        return InvalidAudioLoopHandle;
+    }
+
+    const ALuint buffer = GetOrLoadWavBuffer(path);
+    if (buffer == 0) {
+        return InvalidAudioLoopHandle;
+    }
+
+    ALuint source = 0;
+    alGenSources(1, &source);
+    alSourcei(source, AL_BUFFER, static_cast<ALint>(buffer));
+    alSourcei(source, AL_LOOPING, AL_TRUE);
+    alSourcef(source, AL_GAIN, std::clamp(gain, 0.0f, 4.0f));
+    alSourcef(source, AL_PITCH, std::clamp(pitch, 0.25f, 4.0f));
+    alSourcePlay(source);
+    if (alGetError() != AL_NO_ERROR) {
+        alDeleteSources(1, &source);
+        return InvalidAudioLoopHandle;
+    }
+
+    AudioLoopHandle handle = nextLoopHandle_++;
+    if (handle == InvalidAudioLoopHandle) {
+        handle = nextLoopHandle_++;
+    }
+    loops_[handle] = source;
+    return handle;
+}
+
+bool AudioSystem::SetLoopParameters(
+    AudioLoopHandle handle,
+    float gain,
+    float pitch)
+{
+    const auto loop = loops_.find(handle);
+    if (!initialized_ || loop == loops_.end()) {
+        return false;
+    }
+
+    alSourcef(loop->second, AL_GAIN, std::clamp(gain, 0.0f, 4.0f));
+    alSourcef(loop->second, AL_PITCH, std::clamp(pitch, 0.25f, 4.0f));
+    return alGetError() == AL_NO_ERROR;
+}
+
+void AudioSystem::StopLoop(AudioLoopHandle handle)
+{
+    const auto loop = loops_.find(handle);
+    if (loop == loops_.end()) {
+        return;
+    }
+
+    alSourceStop(loop->second);
+    alDeleteSources(1, &loop->second);
+    loops_.erase(loop);
 }
 
 bool AudioSystem::PlaySoundCue(
@@ -392,6 +461,12 @@ void AudioSystem::Shutdown() {
         }
     }
     sources_.clear();
+
+    for (const auto& [handle, source] : loops_) {
+        alSourceStop(source);
+        alDeleteSources(1, &source);
+    }
+    loops_.clear();
 
     for (const auto& [path, buffer] : wavBuffers_) {
         alDeleteBuffers(1, &buffer);

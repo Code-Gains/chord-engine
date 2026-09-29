@@ -57,6 +57,32 @@ inline bool DrawSoundCueField(const char* label, std::string& cuePath)
     return changed;
 }
 
+inline bool DrawAudioClipField(const char* label, std::string& clipPath)
+{
+    char pathBuffer[512] {};
+    std::snprintf(pathBuffer, sizeof(pathBuffer), "%s", clipPath.c_str());
+
+    bool changed = false;
+    if (ImGui::InputText(label, pathBuffer, sizeof(pathBuffer))) {
+        clipPath = pathBuffer;
+        changed = true;
+    }
+
+    if (ImGui::BeginDragDropTarget()) {
+        if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("ENGINE_AUDIO_CLIP_ASSET")) {
+            clipPath.assign(
+                static_cast<const char*>(payload->Data),
+                static_cast<std::size_t>(payload->DataSize) > 0
+                    ? static_cast<std::size_t>(payload->DataSize) - 1
+                    : 0);
+            changed = true;
+        }
+        ImGui::EndDragDropTarget();
+    }
+
+    return changed;
+}
+
 }
 
 class ViewerComponentUi
@@ -611,7 +637,7 @@ public:
             EditorUi::ScopedItemWidth width{ 260.0f };
 
             int shapeIndex = static_cast<int>(collider->shape);
-            constexpr const char* shapeLabels[] { "Sphere", "Box", "Capsule" };
+            constexpr const char* shapeLabels[] { "Sphere", "Box", "Capsule", "Cylinder", "Compound" };
             if (ImGui::Combo("Shape##JoltColliderShape", &shapeIndex, shapeLabels, IM_ARRAYSIZE(shapeLabels))) {
                 collider->shape = static_cast<Engine::JoltColliderShape>(shapeIndex);
             }
@@ -634,7 +660,14 @@ public:
                 break;
             case Engine::JoltColliderShape::Capsule:
                 ImGui::DragFloat("Radius##JoltColliderCapsuleRadius", &collider->radius, 0.01f, 0.001f, 100000.0f);
-                ImGui::DragFloat("Half Height##JoltColliderCapsuleHalfHeight", &collider->capsuleHalfHeight, 0.01f, 0.0f, 100000.0f);
+                ImGui::DragFloat("Cylinder Half Height##JoltColliderCapsuleHalfHeight", &collider->capsuleHalfHeight, 0.01f, 0.0f, 100000.0f);
+                break;
+            case Engine::JoltColliderShape::Cylinder:
+                ImGui::DragFloat("Radius##JoltColliderCylinderRadius", &collider->radius, 0.01f, 0.001f, 100000.0f);
+                ImGui::DragFloat("Half Height##JoltColliderCylinderHalfHeight", &collider->cylinderHalfHeight, 0.01f, 0.001f, 100000.0f);
+                break;
+            case Engine::JoltColliderShape::Compound:
+                ImGui::TextDisabled("Uses primitive collider descendants");
                 break;
             }
 

@@ -115,6 +115,36 @@ namespace {
         }
     }
 
+    void DrawArc(
+        entt::registry& registry,
+        const Transform& transform,
+        const glm::vec3& center,
+        const glm::vec3& axisA,
+        const glm::vec3& axisB,
+        float radius,
+        float startAngle,
+        float endAngle,
+        const glm::vec4& color)
+    {
+        constexpr int ArcSegments = CircleSegments / 2;
+        glm::vec3 previous = ToWorldPoint(
+            transform,
+            center,
+            axisA * std::cos(startAngle) * radius +
+                axisB * std::sin(startAngle) * radius);
+        for (int segment = 1; segment <= ArcSegments; ++segment) {
+            const float fraction =
+                static_cast<float>(segment) / static_cast<float>(ArcSegments);
+            const float angle = startAngle + (endAngle - startAngle) * fraction;
+            const glm::vec3 local =
+                axisA * std::cos(angle) * radius +
+                axisB * std::sin(angle) * radius;
+            const glm::vec3 current = ToWorldPoint(transform, center, local);
+            AddDebugLine(registry, previous, current, color);
+            previous = current;
+        }
+    }
+
     void DrawSphereCollider(
         entt::registry& registry,
         const Transform& transform,
@@ -140,6 +170,33 @@ namespace {
         const glm::vec3 center = collider.center * scale;
         const float radius = std::max(0.0001f, collider.radius * std::max(scale.x, scale.z));
         const float halfHeight = std::max(0.0f, collider.capsuleHalfHeight * scale.y);
+        const glm::vec3 top{ 0.0f, halfHeight, 0.0f };
+        const glm::vec3 bottom{ 0.0f, -halfHeight, 0.0f };
+
+        DrawCircle(registry, transform, center + top, glm::vec3{ 1.0f, 0.0f, 0.0f }, glm::vec3{ 0.0f, 0.0f, 1.0f }, radius, color);
+        DrawCircle(registry, transform, center + bottom, glm::vec3{ 1.0f, 0.0f, 0.0f }, glm::vec3{ 0.0f, 0.0f, 1.0f }, radius, color);
+
+        DrawArc(registry, transform, center + top, glm::vec3{ 1.0f, 0.0f, 0.0f }, glm::vec3{ 0.0f, 1.0f, 0.0f }, radius, 0.0f, glm::pi<float>(), color);
+        DrawArc(registry, transform, center + bottom, glm::vec3{ 1.0f, 0.0f, 0.0f }, glm::vec3{ 0.0f, 1.0f, 0.0f }, radius, glm::pi<float>(), glm::two_pi<float>(), color);
+        DrawArc(registry, transform, center + top, glm::vec3{ 0.0f, 0.0f, 1.0f }, glm::vec3{ 0.0f, 1.0f, 0.0f }, radius, 0.0f, glm::pi<float>(), color);
+        DrawArc(registry, transform, center + bottom, glm::vec3{ 0.0f, 0.0f, 1.0f }, glm::vec3{ 0.0f, 1.0f, 0.0f }, radius, glm::pi<float>(), glm::two_pi<float>(), color);
+
+        AddDebugLine(registry, ToWorldPoint(transform, center, top + glm::vec3{ radius, 0.0f, 0.0f }), ToWorldPoint(transform, center, bottom + glm::vec3{ radius, 0.0f, 0.0f }), color);
+        AddDebugLine(registry, ToWorldPoint(transform, center, top + glm::vec3{ -radius, 0.0f, 0.0f }), ToWorldPoint(transform, center, bottom + glm::vec3{ -radius, 0.0f, 0.0f }), color);
+        AddDebugLine(registry, ToWorldPoint(transform, center, top + glm::vec3{ 0.0f, 0.0f, radius }), ToWorldPoint(transform, center, bottom + glm::vec3{ 0.0f, 0.0f, radius }), color);
+        AddDebugLine(registry, ToWorldPoint(transform, center, top + glm::vec3{ 0.0f, 0.0f, -radius }), ToWorldPoint(transform, center, bottom + glm::vec3{ 0.0f, 0.0f, -radius }), color);
+    }
+
+    void DrawCylinderCollider(
+        entt::registry& registry,
+        const Transform& transform,
+        const Engine::JoltColliderComponent& collider,
+        const glm::vec4& color)
+    {
+        const glm::vec3 scale = AbsScale(transform.scale);
+        const glm::vec3 center = collider.center * scale;
+        const float radius = std::max(0.0001f, collider.radius * std::max(scale.x, scale.z));
+        const float halfHeight = std::max(0.0001f, collider.cylinderHalfHeight * scale.y);
         const glm::vec3 top{ 0.0f, halfHeight, 0.0f };
         const glm::vec3 bottom{ 0.0f, -halfHeight, 0.0f };
 
@@ -199,6 +256,11 @@ void JoltColliderDebugDrawSystem::Update(float)
             break;
         case Engine::JoltColliderShape::Capsule:
             DrawCapsuleCollider(_registry, transform, collider, color);
+            break;
+        case Engine::JoltColliderShape::Cylinder:
+            DrawCylinderCollider(_registry, transform, collider, color);
+            break;
+        case Engine::JoltColliderShape::Compound:
             break;
         }
     }

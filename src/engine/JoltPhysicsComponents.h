@@ -9,7 +9,9 @@ namespace Engine {
 enum class JoltColliderShape {
     Sphere,
     Box,
-    Capsule
+    Capsule,
+    Cylinder,
+    Compound
 };
 
 enum class JoltBodyMotion {
@@ -25,6 +27,7 @@ struct JoltColliderComponent {
     float radius = 1.0f;
     glm::vec3 halfExtents{ 0.5f };
     float capsuleHalfHeight = 0.5f;
+    float cylinderHalfHeight = 0.5f;
     float friction = 0.2f;
     float restitution = 0.0f;
 };
@@ -39,8 +42,10 @@ struct JoltBodyComponent {
     float radius = 1.0f;
     glm::vec3 halfExtents{ 0.5f };
     float capsuleHalfHeight = 0.5f;
+    float cylinderHalfHeight = 0.5f;
     float friction = 0.2f;
     float restitution = 0.0f;
+    uint64_t compoundSignature = 0;
 };
 
 } // namespace Engine

@@ -7,6 +7,7 @@
 #include "Camera.h"
 #include "EditorSelection.h"
 #include "EditorInteractionState.h"
+#include "EditorHistory.h"
 #include "EntityState.h"
 #include "InputSystem.h"
 #include "MeshComponent.h"
@@ -155,6 +156,23 @@ namespace {
             !registry.all_of<Engine::CoreOwnedTag>(selectedEntity);
     }
 
+    bool IsAncestorOf(
+        entt::registry& registry,
+        entt::entity ancestor,
+        entt::entity entity)
+    {
+        const auto* hierarchy = registry.try_get<HierarchyComponent>(entity);
+        entt::entity current = hierarchy ? hierarchy->parent : entt::null;
+        while (current != entt::null && registry.valid(current)) {
+            if (current == ancestor) {
+                return true;
+            }
+            const auto* parentHierarchy = registry.try_get<HierarchyComponent>(current);
+            current = parentHierarchy ? parentHierarchy->parent : entt::null;
+        }
+        return false;
+    }
+
     void CollectDescendants(
         entt::registry& registry,
         entt::entity parent,
@@ -172,7 +190,7 @@ namespace {
         }
     }
 
-    void DeleteSelectedEntity(entt::registry& registry, entt::entity& selectedEntity)
+    void DestroySelectedEntity(entt::registry& registry, entt::entity& selectedEntity)
     {
         if (!CanDeleteSelectedEntity(registry, selectedEntity)) {
             return;
@@ -272,12 +290,21 @@ void RegistryViewer::DrawUi()
 {
     auto& windowRegistry = _registry.ctx().get<ImGuiWindowRegistry>();
     auto& editorSelection = GetEditorSelection(_registry);
+    if (editorSelection.selectedEntity != _selectedEntity) {
+        _selectedEntity = editorSelection.selectedEntity;
+        if (_selectedEntity != entt::null && !_registry.valid(_selectedEntity)) {
+            ClearSelectedEntity(_registry, _selectedEntity);
+        }
+        else {
+            _revealSelectedEntity = _selectedEntity != entt::null;
+        }
+    }
 
     if (ImGui::IsKeyPressed(ImGuiKey_Delete, false) &&
         !ImGui::GetIO().WantTextInput &&
         !ImGui::IsAnyItemActive())
     {
-        DeleteSelectedEntity(_registry, _selectedEntity);
+        DeleteSelectedEntityWithHistory();
     }
 
     const ImGuiIO& io = ImGui::GetIO();
@@ -403,6 +430,19 @@ void RegistryViewer::DrawUi()
 
             _selectedEntity = entity;
             editorSelection.selectedEntity = _selectedEntity;
+
+            if (_core) {
+                auto serializer = _core->CreateWorldSerializer();
+                if (auto hierarchy = serializer.SerializeEntityHierarchy(*_core, entity)) {
+                    auto& history = GetEditorHistory(_registry);
+                    history.PushEntityLifecycle(EditorEntityLifecycleCommand {
+                        std::move(*hierarchy),
+                        false,
+                        true,
+                        "Create " + _registry.get<NameComponent>(entity).name
+                    });
+                }
+            }
         }
 
         ImGui::SameLine();
@@ -415,7 +455,7 @@ void RegistryViewer::DrawUi()
 
         if (ImGui::Button("- Entity"))
         {
-            DeleteSelectedEntity(_registry, _selectedEntity);
+            DeleteSelectedEntityWithHistory();
         }
 
         if (!canDeleteSelectedEntity) {
@@ -551,6 +591,7 @@ void RegistryViewer::SetSelectedEntity(entt::entity entity)
 
     _selectedEntity = entity;
     GetEditorSelection(_registry).selectedEntity = entity;
+    _revealSelectedEntity = entity != entt::null;
 }
 
 bool RegistryViewer::CanCopySelectedEntity() const
@@ -573,7 +614,7 @@ bool RegistryViewer::CopySelectedEntity()
     }
 
     auto serializer = _core->CreateWorldSerializer();
-    _copiedEntity = serializer.SerializeEntity(*_core, _selectedEntity);
+    _copiedEntity = serializer.SerializeEntityHierarchy(*_core, _selectedEntity);
     return _copiedEntity.has_value();
 }
 
@@ -584,15 +625,58 @@ bool RegistryViewer::PasteCopiedEntity()
     }
 
     auto serializer = _core->CreateWorldSerializer();
-    const entt::entity pastedEntity = serializer.InstantiateEntity(*_core, _copiedEntity.value());
+    const auto pastedRoot = serializer.InstantiateEntityHierarchy(
+        *_core,
+        _copiedEntity.value(),
+        false,
+        true);
+    const entt::entity pastedEntity = pastedRoot.value_or(entt::null);
     if (_registry.valid(pastedEntity)) {
         if (auto* name = _registry.try_get<NameComponent>(pastedEntity)) {
             name->name = MakeUniqueCopyName(_registry, name->name);
+        }
+
+        if (auto hierarchy = serializer.SerializeEntityHierarchy(*_core, pastedEntity)) {
+            auto& history = GetEditorHistory(_registry);
+            history.PushEntityLifecycle(EditorEntityLifecycleCommand {
+                std::move(*hierarchy),
+                false,
+                true,
+                "Duplicate " + (_registry.all_of<NameComponent>(pastedEntity)
+                    ? _registry.get<NameComponent>(pastedEntity).name
+                    : std::string("entity"))
+            });
         }
     }
 
     SetSelectedEntity(pastedEntity);
     return _registry.valid(pastedEntity);
+}
+
+bool RegistryViewer::DeleteSelectedEntityWithHistory()
+{
+    if (!_core || !CanDeleteSelectedEntity(_registry, _selectedEntity)) {
+        return false;
+    }
+
+    auto serializer = _core->CreateWorldSerializer();
+    const std::string entityName = _registry.all_of<NameComponent>(_selectedEntity)
+        ? _registry.get<NameComponent>(_selectedEntity).name
+        : std::string("entity");
+    auto hierarchy = serializer.SerializeEntityHierarchy(*_core, _selectedEntity);
+    if (!hierarchy) {
+        return false;
+    }
+
+    DestroySelectedEntity(_registry, _selectedEntity);
+    auto& history = GetEditorHistory(_registry);
+    history.PushEntityLifecycle(EditorEntityLifecycleCommand {
+        std::move(*hierarchy),
+        true,
+        false,
+        "Delete " + entityName
+    });
+    return true;
 }
 
 void RegistryViewer::DrawEntityNode(entt::entity entity)
@@ -640,6 +724,12 @@ void RegistryViewer::DrawEntityNode(entt::entity entity)
         flags |= ImGuiTreeNodeFlags_Selected;
     }
 
+    if (_revealSelectedEntity &&
+        hasChildren &&
+        IsAncestorOf(_registry, entity, _selectedEntity)) {
+        ImGui::SetNextItemOpen(true, ImGuiCond_Always);
+    }
+
     ImGui::PushID((int)entt::to_integral(entity));
     if (disabled) {
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4{ 0.45f, 0.52f, 0.48f, 1.0f });
@@ -647,6 +737,11 @@ void RegistryViewer::DrawEntityNode(entt::entity entity)
     const bool open = ImGui::TreeNodeEx(label.c_str(), flags);
     if (disabled) {
         ImGui::PopStyleColor();
+    }
+
+    if (_revealSelectedEntity && _selectedEntity == entity) {
+        ImGui::SetScrollHereY(0.5f);
+        _revealSelectedEntity = false;
     }
 
     if (ImGui::IsItemHovered() &&

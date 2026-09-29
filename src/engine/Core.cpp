@@ -352,6 +352,27 @@ bool Core::PlayProjectAudioOneShot(
     return _audioSystem.PlayWavOneShot(ResolveProjectPath(path), gain, pitch);
 }
 
+AudioLoopHandle Core::StartProjectAudioLoop(
+    const std::filesystem::path& path,
+    float gain,
+    float pitch)
+{
+    return _audioSystem.StartWavLoop(ResolveProjectPath(path), gain, pitch);
+}
+
+bool Core::UpdateProjectAudioLoop(
+    AudioLoopHandle handle,
+    float gain,
+    float pitch)
+{
+    return _audioSystem.SetLoopParameters(handle, gain, pitch);
+}
+
+void Core::StopProjectAudioLoop(AudioLoopHandle handle)
+{
+    _audioSystem.StopLoop(handle);
+}
+
 bool Core::PlayProjectSoundCue(
     const std::filesystem::path& path,
     float gainScale,

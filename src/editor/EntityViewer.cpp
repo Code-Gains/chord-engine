@@ -18,6 +18,187 @@
 
 namespace {
 
+bool SerializedComponentsEqual(
+    const Engine::Serialization::SerializedEntity& left,
+    const Engine::Serialization::SerializedEntity& right)
+{
+    if (left.id != right.id || left.components.size() != right.components.size()) {
+        return false;
+    }
+
+    for (size_t index = 0; index < left.components.size(); ++index) {
+        if (left.components[index].type != right.components[index].type ||
+            left.components[index].data != right.components[index].data) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool SerializedStatesEqual(
+    const std::vector<Engine::Serialization::SerializedEntity>& left,
+    const std::vector<Engine::Serialization::SerializedEntity>& right)
+{
+    if (left.size() != right.size()) {
+        return false;
+    }
+
+    for (size_t index = 0; index < left.size(); ++index) {
+        if (!SerializedComponentsEqual(left[index], right[index])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+void AddUniqueEntity(std::vector<entt::entity>& entities, entt::entity entity)
+{
+    if (entity != entt::null &&
+        std::find(entities.begin(), entities.end(), entity) == entities.end()) {
+        entities.push_back(entity);
+    }
+}
+
+std::vector<entt::entity> CollectTrackedEntities(
+    entt::registry& registry,
+    entt::entity selectedEntity)
+{
+    std::vector<entt::entity> entities;
+    AddUniqueEntity(entities, selectedEntity);
+
+    auto activeCameraView = registry.view<ActiveCameraTag>(
+        entt::exclude<Engine::CoreOwnedTag>);
+    for (const entt::entity entity : activeCameraView) {
+        AddUniqueEntity(entities, entity);
+    }
+    return entities;
+}
+
+std::vector<Engine::Serialization::SerializedEntity> CaptureEntityStates(
+    Engine::WorldSerializer& serializer,
+    Engine::Core& core,
+    const std::vector<entt::entity>& entities)
+{
+    std::vector<Engine::Serialization::SerializedEntity> snapshots;
+    snapshots.reserve(entities.size());
+    for (const entt::entity entity : entities) {
+        if (auto snapshot = serializer.SerializeEntity(core, entity)) {
+            snapshots.push_back(std::move(*snapshot));
+        }
+    }
+    return snapshots;
+}
+
+const Engine::Serialization::SerializedEntity* FindSerializedEntity(
+    const std::vector<Engine::Serialization::SerializedEntity>& states,
+    entt::entity entity)
+{
+    const uint64_t id = static_cast<uint64_t>(entt::to_integral(entity));
+    const auto found = std::find_if(states.begin(), states.end(), [&](const auto& state) {
+        return state.id == id;
+    });
+    return found == states.end() ? nullptr : &*found;
+}
+
+const Engine::Serialization::SerializedComponent* FindSerializedComponent(
+    const Engine::Serialization::SerializedEntity* entity,
+    std::string_view type)
+{
+    if (!entity) {
+        return nullptr;
+    }
+
+    const auto found = std::find_if(
+        entity->components.begin(),
+        entity->components.end(),
+        [&](const auto& component) { return component.type == type; });
+    return found == entity->components.end() ? nullptr : &*found;
+}
+
+EditorComponentCommand BuildComponentCommand(
+    entt::entity selectedEntity,
+    const std::vector<Engine::Serialization::SerializedEntity>& before,
+    const std::vector<Engine::Serialization::SerializedEntity>& after,
+    std::string label)
+{
+    EditorComponentCommand command;
+    command.selectedEntity = selectedEntity;
+    command.label = std::move(label);
+
+    for (const auto& beforeEntity : before) {
+        const entt::entity entity = static_cast<entt::entity>(beforeEntity.id);
+        const auto* afterEntity = FindSerializedEntity(after, entity);
+        for (const auto& beforeComponent : beforeEntity.components) {
+            const auto* afterComponent = FindSerializedComponent(
+                afterEntity,
+                beforeComponent.type);
+            if (!afterComponent || beforeComponent.data != afterComponent->data) {
+                command.deltas.push_back(EditorComponentDelta {
+                    entity,
+                    beforeComponent.type,
+                    beforeComponent,
+                    afterComponent
+                        ? std::optional<Engine::Serialization::SerializedComponent>(*afterComponent)
+                        : std::nullopt
+                });
+            }
+        }
+    }
+
+    for (const auto& afterEntity : after) {
+        const entt::entity entity = static_cast<entt::entity>(afterEntity.id);
+        const auto* beforeEntity = FindSerializedEntity(before, entity);
+        for (const auto& afterComponent : afterEntity.components) {
+            if (!FindSerializedComponent(beforeEntity, afterComponent.type)) {
+                command.deltas.push_back(EditorComponentDelta {
+                    entity,
+                    afterComponent.type,
+                    std::nullopt,
+                    afterComponent
+                });
+            }
+        }
+    }
+
+    return command;
+}
+
+std::string ComponentEditLabel(
+    entt::registry& registry,
+    entt::entity selectedEntity,
+    const std::vector<Engine::Serialization::SerializedEntity>& before,
+    const std::vector<Engine::Serialization::SerializedEntity>& after)
+{
+    const auto* beforeEntity = FindSerializedEntity(before, selectedEntity);
+    const auto* afterEntity = FindSerializedEntity(after, selectedEntity);
+    if (beforeEntity && afterEntity) {
+        for (const auto& component : afterEntity->components) {
+            const bool existed = std::any_of(
+                beforeEntity->components.begin(),
+                beforeEntity->components.end(),
+                [&](const auto& previous) { return previous.type == component.type; });
+            if (!existed) {
+                return "Add " + component.type;
+            }
+        }
+
+        for (const auto& component : beforeEntity->components) {
+            const bool remains = std::any_of(
+                afterEntity->components.begin(),
+                afterEntity->components.end(),
+                [&](const auto& current) { return current.type == component.type; });
+            if (!remains) {
+                return "Remove " + component.type;
+            }
+        }
+    }
+
+    const std::string entityName = registry.all_of<NameComponent>(selectedEntity)
+        ? registry.get<NameComponent>(selectedEntity).name
+        : std::string("entity");
+    return "Edit " + entityName;
+}
+
 glm::vec3 CatmullRom(
     const glm::vec3& p0,
     const glm::vec3& p1,
@@ -229,6 +410,22 @@ void EntityViewer::DrawUi()
 
         if (selectedEntity != entt::null && _registry.valid(selectedEntity))
         {
+            auto& history = GetEditorHistory(_registry);
+            if (_core) {
+                const bool selectionChanged = _componentHistoryEntity != selectedEntity;
+                const bool historyChanged = _observedHistoryRevision != history.Revision();
+                if (selectionChanged || (historyChanged && !_componentInteractionActive)) {
+                    auto serializer = _core->CreateWorldSerializer();
+                    _componentHistoryBaseline = CaptureEntityStates(
+                        serializer,
+                        *_core,
+                        CollectTrackedEntities(_registry, selectedEntity));
+                    _componentHistoryEntity = selectedEntity;
+                    _observedHistoryRevision = history.Revision();
+                    _componentInteractionActive = false;
+                }
+            }
+
             bool enabled = !_registry.all_of<DisabledEntityTag>(selectedEntity);
             if (ImGui::Checkbox("Enabled", &enabled)) {
                 if (enabled) {
@@ -272,6 +469,56 @@ void EntityViewer::DrawUi()
             {
                 ui->Draw(_registry, selectedEntity);
             }
+
+            if (_core) {
+                const bool popupOpen = ImGui::IsPopupOpen(
+                    nullptr,
+                    ImGuiPopupFlags_AnyPopupId);
+                const bool itemActive = ImGui::IsAnyItemActive();
+                const bool clickedInViewer =
+                    ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows) &&
+                    (ImGui::IsMouseClicked(ImGuiMouseButton_Left) ||
+                        ImGui::IsMouseClicked(ImGuiMouseButton_Right));
+
+                if (itemActive || popupOpen || clickedInViewer) {
+                    _componentInteractionActive = true;
+                }
+                else if (_componentInteractionActive) {
+                    auto serializer = _core->CreateWorldSerializer();
+                    std::vector<entt::entity> trackedEntities;
+                    trackedEntities.reserve(_componentHistoryBaseline.size() + 2);
+                    for (const auto& entity : _componentHistoryBaseline) {
+                        AddUniqueEntity(
+                            trackedEntities,
+                            static_cast<entt::entity>(entity.id));
+                    }
+                    for (const entt::entity entity :
+                        CollectTrackedEntities(_registry, selectedEntity)) {
+                        AddUniqueEntity(trackedEntities, entity);
+                    }
+
+                    auto afterStates = CaptureEntityStates(
+                        serializer,
+                        *_core,
+                        trackedEntities);
+                    if (!SerializedStatesEqual(_componentHistoryBaseline, afterStates)) {
+                        history.PushComponents(BuildComponentCommand(
+                            selectedEntity,
+                            _componentHistoryBaseline,
+                            afterStates,
+                            ComponentEditLabel(
+                                _registry,
+                                selectedEntity,
+                                _componentHistoryBaseline,
+                                afterStates)));
+                    }
+
+                    _componentHistoryBaseline = std::move(afterStates);
+                    _componentHistoryEntity = selectedEntity;
+                    _observedHistoryRevision = history.Revision();
+                    _componentInteractionActive = false;
+                }
+            }
         }
     }
 
@@ -280,7 +527,10 @@ void EntityViewer::DrawUi()
     windowRegistry.SetWindowOpen("Entity Viewer", open);
 }
 
-EntityViewer::EntityViewer(entt::registry &registry, RegistryViewer* registryViewerPtr, Engine::Core* core) : System(registry), _registryViewerPtr(registryViewerPtr)
+EntityViewer::EntityViewer(entt::registry &registry, RegistryViewer* registryViewerPtr, Engine::Core* core)
+    : System(registry)
+    , _registryViewerPtr(registryViewerPtr)
+    , _core(core)
 {
     _componentUis.push_back(std::make_unique<NameComponentUi>());
     _componentUis.push_back(std::make_unique<TransformComponentUi>());
@@ -515,6 +765,49 @@ EntityViewer::EntityViewer(entt::registry &registry, RegistryViewer* registryVie
             collider.shape = Engine::JoltColliderShape::Box;
             collider.motion = Engine::JoltBodyMotion::Static;
             collider.halfExtents = glm::vec3{ 0.5f };
+        }
+    );
+
+    AddComponentMenuItem(
+        "Static Capsule Collider",
+        [](entt::registry& registry, entt::entity entity) {
+            return registry.all_of<Transform>(entity) &&
+                   !registry.all_of<Engine::JoltColliderComponent>(entity);
+        },
+        [](entt::registry& registry, entt::entity entity) {
+            auto& collider = registry.emplace<Engine::JoltColliderComponent>(entity);
+            collider.shape = Engine::JoltColliderShape::Capsule;
+            collider.motion = Engine::JoltBodyMotion::Static;
+            collider.radius = 0.5f;
+            collider.capsuleHalfHeight = 0.5f;
+        }
+    );
+
+    AddComponentMenuItem(
+        "Static Cylinder Collider",
+        [](entt::registry& registry, entt::entity entity) {
+            return registry.all_of<Transform>(entity) &&
+                   !registry.all_of<Engine::JoltColliderComponent>(entity);
+        },
+        [](entt::registry& registry, entt::entity entity) {
+            auto& collider = registry.emplace<Engine::JoltColliderComponent>(entity);
+            collider.shape = Engine::JoltColliderShape::Cylinder;
+            collider.motion = Engine::JoltBodyMotion::Static;
+            collider.radius = 0.5f;
+            collider.cylinderHalfHeight = 0.5f;
+        }
+    );
+
+    AddComponentMenuItem(
+        "Static Compound Collider Root",
+        [](entt::registry& registry, entt::entity entity) {
+            return registry.all_of<Transform>(entity) &&
+                   !registry.all_of<Engine::JoltColliderComponent>(entity);
+        },
+        [](entt::registry& registry, entt::entity entity) {
+            auto& collider = registry.emplace<Engine::JoltColliderComponent>(entity);
+            collider.shape = Engine::JoltColliderShape::Compound;
+            collider.motion = Engine::JoltBodyMotion::Static;
         }
     );
 

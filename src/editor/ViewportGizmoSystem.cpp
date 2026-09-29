@@ -7,6 +7,7 @@
 #include "EntityState.h"
 #include "HierarchyComponent.h"
 #include "HierarchySystem.h"
+#include "ImGuiWindowRegistry.h"
 #include "Transform.h"
 
 #include <imgui.h>
@@ -87,6 +88,7 @@ ViewportGizmoSystem::ViewportGizmoSystem(entt::registry& registry, Engine::Core&
     if (!_registry.ctx().contains<EditorHistory>()) {
         _registry.ctx().emplace<EditorHistory>();
     }
+    _registry.ctx().get<ImGuiWindowRegistry>().RegisterWindow("History", false);
 }
 
 void ViewportGizmoSystem::DrawUi()
@@ -103,19 +105,22 @@ void ViewportGizmoSystem::DrawUi()
 
     const ImGuiIO& io = ImGui::GetIO();
     auto& history = _registry.ctx().get<EditorHistory>();
+    const auto applyHistorySelection = [&](entt::entity entity) {
+        _registry.ctx().get<EditorSelection>().selectedEntity = entity;
+    };
     if (!interaction.cameraNavigating &&
         !io.WantTextInput &&
         !ImGui::IsAnyItemActive()) {
         if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Z, false)) {
             if (io.KeyShift) {
-                history.Redo(_registry);
+                applyHistorySelection(history.Redo(_core));
             }
             else {
-                history.Undo(_registry);
+                applyHistorySelection(history.Undo(_core));
             }
         }
         else if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Y, false)) {
-            history.Redo(_registry);
+            applyHistorySelection(history.Redo(_core));
         }
         else if (ImGui::IsKeyPressed(ImGuiKey_Q, false)) {
             _operation = Operation::None;
@@ -131,13 +136,51 @@ void ViewportGizmoSystem::DrawUi()
         }
     }
 
-    const entt::entity selectedEntity =
-        _registry.ctx().get<EditorSelection>().selectedEntity;
-    if (selectedEntity == entt::null ||
-        !_registry.valid(selectedEntity) ||
-        !_registry.all_of<Transform>(selectedEntity) ||
-        _registry.all_of<Engine::CoreOwnedTag>(selectedEntity)) {
-        return;
+    auto& windowRegistry = _registry.ctx().get<ImGuiWindowRegistry>();
+    if (windowRegistry.IsWindowOpen("History")) {
+        bool historyOpen = true;
+        if (ImGui::Begin("History", &historyOpen)) {
+            ImGui::BeginDisabled(!history.CanUndo());
+            if (ImGui::Button("Undo##HistoryWindow")) {
+                applyHistorySelection(history.Undo(_core));
+            }
+            ImGui::EndDisabled();
+            ImGui::SameLine();
+            ImGui::BeginDisabled(!history.CanRedo());
+            if (ImGui::Button("Redo##HistoryWindow")) {
+                applyHistorySelection(history.Redo(_core));
+            }
+            ImGui::EndDisabled();
+
+            ImGui::Separator();
+            const auto& commands = history.Commands();
+            if (commands.empty()) {
+                ImGui::TextDisabled("No editor commands");
+            }
+            else {
+                for (size_t index = 0; index < commands.size(); ++index) {
+                    const bool applied = index < history.Cursor();
+                    if (!applied) {
+                        ImGui::PushStyleColor(
+                            ImGuiCol_Text,
+                            ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+                    }
+
+                    const std::string row =
+                        std::to_string(index + 1) + ". " + EditorHistory::Label(commands[index]);
+                    ImGui::Selectable(
+                        row.c_str(),
+                        applied && index + 1 == history.Cursor(),
+                        ImGuiSelectableFlags_Disabled);
+
+                    if (!applied) {
+                        ImGui::PopStyleColor();
+                    }
+                }
+            }
+        }
+        ImGui::End();
+        windowRegistry.SetWindowOpen("History", historyOpen);
     }
 
     ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, 38.0f), ImGuiCond_Always, ImVec2(0.5f, 0.0f));
@@ -176,13 +219,13 @@ void ViewportGizmoSystem::DrawUi()
 
         ImGui::BeginDisabled(!history.CanUndo());
         if (ImGui::Button("Undo")) {
-            history.Undo(_registry);
+            applyHistorySelection(history.Undo(_core));
         }
         ImGui::EndDisabled();
         ImGui::SameLine();
         ImGui::BeginDisabled(!history.CanRedo());
         if (ImGui::Button("Redo")) {
-            history.Redo(_registry);
+            applyHistorySelection(history.Redo(_core));
         }
         ImGui::EndDisabled();
         ImGui::SameLine();
@@ -218,6 +261,15 @@ void ViewportGizmoSystem::DrawUi()
         }
     }
     ImGui::End();
+
+    const entt::entity selectedEntity =
+        _registry.ctx().get<EditorSelection>().selectedEntity;
+    if (selectedEntity == entt::null ||
+        !_registry.valid(selectedEntity) ||
+        !_registry.all_of<Transform>(selectedEntity) ||
+        _registry.all_of<Engine::CoreOwnedTag>(selectedEntity)) {
+        return;
+    }
 
     if (_operation == Operation::None) {
         return;

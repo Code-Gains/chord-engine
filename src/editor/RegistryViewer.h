@@ -14,15 +14,17 @@ class RegistryViewer : public System {
     virtual void DrawUi() override;
 
     entt::entity _selectedEntity{ entt::null };
+    bool _revealSelectedEntity = false;
     bool _showCoreOwnedEntities = false;
     bool _showEntityIds = false;
     Engine::Core* _core = nullptr;
-    std::optional<Engine::Serialization::SerializedEntity> _copiedEntity;
+    std::optional<Engine::Serialization::SerializedEntityHierarchy> _copiedEntity;
 
     bool CanCopySelectedEntity() const;
     bool CanPasteEntity() const;
     bool CopySelectedEntity();
     bool PasteCopiedEntity();
+    bool DeleteSelectedEntityWithHistory();
     void DrawEntityNode(entt::entity entity);
 
 

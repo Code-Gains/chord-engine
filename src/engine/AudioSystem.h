@@ -6,12 +6,16 @@
 #include "SoundCueAsset.h"
 
 #include <chrono>
+#include <cstdint>
 #include <filesystem>
 #include <random>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
+
+using AudioLoopHandle = uint32_t;
+inline constexpr AudioLoopHandle InvalidAudioLoopHandle = 0;
 
 class AudioSystem {
 public:
@@ -33,6 +37,12 @@ public:
         const std::filesystem::path& path,
         float gain = 1.0f,
         float pitch = 1.0f);
+    AudioLoopHandle StartWavLoop(
+        const std::filesystem::path& path,
+        float gain = 1.0f,
+        float pitch = 1.0f);
+    bool SetLoopParameters(AudioLoopHandle handle, float gain, float pitch);
+    void StopLoop(AudioLoopHandle handle);
     bool PlaySoundCue(
         const std::filesystem::path& cuePath,
         const std::filesystem::path& projectRoot,
@@ -62,7 +72,11 @@ private:
     std::unordered_set<std::string> failedWavPaths_;
     std::unordered_set<std::string> failedSoundCuePaths_;
     std::vector<ActiveSource> sources_;
+    std::unordered_map<AudioLoopHandle, ALuint> loops_;
+    AudioLoopHandle nextLoopHandle_ = 1;
     std::mt19937 randomGenerator_ { std::random_device{}() };
 
     bool initialized_ = false;
+
+    ALuint GetOrLoadWavBuffer(const std::filesystem::path& path);
 };

@@ -2,6 +2,7 @@
 
 #include "Core.h"
 #include "EntityState.h"
+#include "HierarchyComponent.h"
 #include "JoltPhysicsComponents.h"
 #include "Log.h"
 #include "Transform.h"
@@ -21,14 +22,18 @@
 #include <Jolt/Physics/Collision/ObjectLayer.h>
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
 #include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
+#include <Jolt/Physics/Collision/Shape/CylinderShape.h>
 #include <Jolt/Physics/Collision/Shape/RotatedTranslatedShape.h>
 #include <Jolt/Physics/Collision/Shape/Shape.h>
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
+#include <Jolt/Physics/Collision/Shape/StaticCompoundShape.h>
 #include <Jolt/Physics/PhysicsSystem.h>
 #include <Jolt/RegisterTypes.h>
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
+#include <functional>
 #include <thread>
 
 namespace Engine {
@@ -164,7 +169,7 @@ glm::vec3 AbsScale(const glm::vec3& scale)
     };
 }
 
-JPH::RefConst<JPH::Shape> CreateShape(const JoltColliderComponent& collider, const Transform& transform)
+JPH::RefConst<JPH::Shape> CreatePrimitiveShape(const JoltColliderComponent& collider, const Transform& transform)
 {
     const glm::vec3 scale = AbsScale(transform.scale);
 
@@ -181,6 +186,15 @@ JPH::RefConst<JPH::Shape> CreateShape(const JoltColliderComponent& collider, con
             std::max(0.0f, collider.capsuleHalfHeight * scale.y),
             std::max(0.0001f, collider.radius * std::max(scale.x, scale.z)));
         break;
+    case JoltColliderShape::Cylinder: {
+        const float halfHeight = std::max(0.0001f, collider.cylinderHalfHeight * scale.y);
+        const float radius = std::max(0.0001f, collider.radius * std::max(scale.x, scale.z));
+        const float convexRadius = std::min(0.05f, 0.5f * std::min(halfHeight, radius));
+        shape = new JPH::CylinderShape(halfHeight, radius, convexRadius);
+        break;
+    }
+    case JoltColliderShape::Compound:
+        return nullptr;
     }
 
     if (glm::dot(collider.center, collider.center) <= 0.0000001f) {
@@ -191,6 +205,149 @@ JPH::RefConst<JPH::Shape> CreateShape(const JoltColliderComponent& collider, con
         ToJoltVec3(collider.center * scale),
         JPH::Quat::sIdentity(),
         shape);
+}
+
+entt::entity FindCompoundAncestor(entt::registry& registry, entt::entity entity)
+{
+    const auto* hierarchy = registry.try_get<HierarchyComponent>(entity);
+    entt::entity current = hierarchy ? hierarchy->parent : entt::null;
+    while (current != entt::null && registry.valid(current)) {
+        if (const auto* collider = registry.try_get<JoltColliderComponent>(current);
+            collider && collider->shape == JoltColliderShape::Compound) {
+            return current;
+        }
+
+        const auto* parentHierarchy = registry.try_get<HierarchyComponent>(current);
+        current = parentHierarchy ? parentHierarchy->parent : entt::null;
+    }
+    return entt::null;
+}
+
+bool IsDescendantOf(entt::registry& registry, entt::entity entity, entt::entity ancestor)
+{
+    const auto* hierarchy = registry.try_get<HierarchyComponent>(entity);
+    entt::entity current = hierarchy ? hierarchy->parent : entt::null;
+    while (current != entt::null && registry.valid(current)) {
+        if (current == ancestor) {
+            return true;
+        }
+        const auto* parentHierarchy = registry.try_get<HierarchyComponent>(current);
+        current = parentHierarchy ? parentHierarchy->parent : entt::null;
+    }
+    return false;
+}
+
+void HashCombine(uint64_t& seed, uint64_t value)
+{
+    seed ^= value + 0x9e3779b97f4a7c15ull + (seed << 6u) + (seed >> 2u);
+}
+
+void HashFloat(uint64_t& seed, float value)
+{
+    HashCombine(seed, std::bit_cast<uint32_t>(value));
+}
+
+uint64_t CompoundSignature(entt::registry& registry, entt::entity root)
+{
+    uint64_t signature = 0;
+    const auto& rootTransform = registry.get<Transform>(root);
+    const glm::quat inverseRootRotation = glm::inverse(glm::normalize(rootTransform.rotation));
+    auto view = registry.view<Transform, JoltColliderComponent>(entt::exclude<DisabledEntityTag>);
+    for (const entt::entity entity : view) {
+        if (entity == root ||
+            IsEntityDisabled(registry, entity) ||
+            !IsDescendantOf(registry, entity, root)) {
+            continue;
+        }
+
+        const auto& collider = view.get<JoltColliderComponent>(entity);
+        if (collider.shape == JoltColliderShape::Compound) {
+            continue;
+        }
+
+        const auto& transform = view.get<Transform>(entity);
+        const glm::vec3 localPosition =
+            inverseRootRotation * (transform.position - rootTransform.position);
+        const glm::quat localRotation = glm::normalize(
+            inverseRootRotation * transform.rotation);
+        HashCombine(signature, static_cast<uint64_t>(entt::to_integral(entity)));
+        HashCombine(signature, static_cast<uint64_t>(collider.shape));
+        for (const float value : {
+                 localPosition.x, localPosition.y, localPosition.z,
+                 localRotation.w, localRotation.x, localRotation.y, localRotation.z,
+                 transform.scale.x, transform.scale.y, transform.scale.z,
+                 collider.center.x, collider.center.y, collider.center.z,
+                 collider.radius,
+                 collider.halfExtents.x, collider.halfExtents.y, collider.halfExtents.z,
+                 collider.capsuleHalfHeight,
+                 collider.cylinderHalfHeight }) {
+            HashFloat(signature, value);
+        }
+    }
+    return signature;
+}
+
+JPH::RefConst<JPH::Shape> CreateCompoundShape(
+    entt::registry& registry,
+    entt::entity root,
+    const JoltColliderComponent& rootCollider,
+    const Transform& rootTransform)
+{
+    JPH::StaticCompoundShapeSettings settings;
+    const glm::quat inverseRootRotation = glm::inverse(glm::normalize(rootTransform.rotation));
+    const glm::vec3 rootOffset = rootCollider.center * AbsScale(rootTransform.scale);
+
+    auto view = registry.view<Transform, JoltColliderComponent>(entt::exclude<DisabledEntityTag>);
+    for (const entt::entity entity : view) {
+        if (entity == root ||
+            IsEntityDisabled(registry, entity) ||
+            !IsDescendantOf(registry, entity, root)) {
+            continue;
+        }
+
+        const auto& collider = view.get<JoltColliderComponent>(entity);
+        if (collider.shape == JoltColliderShape::Compound) {
+            continue;
+        }
+
+        const auto& transform = view.get<Transform>(entity);
+        const auto childShape = CreatePrimitiveShape(collider, transform);
+        if (childShape == nullptr) {
+            continue;
+        }
+
+        const glm::vec3 localPosition =
+            inverseRootRotation * (transform.position - rootTransform.position) + rootOffset;
+        const glm::quat localRotation = glm::normalize(
+            inverseRootRotation * transform.rotation);
+        settings.AddShape(
+            ToJoltVec3(localPosition),
+            ToJoltQuat(localRotation),
+            childShape.GetPtr());
+    }
+
+    if (settings.mSubShapes.empty()) {
+        return nullptr;
+    }
+
+    auto result = settings.Create();
+    if (result.HasError()) {
+        ENGINE_LOG_ERROR("Failed to create Jolt compound shape: " + result.GetError());
+        return nullptr;
+    }
+    return result.Get();
+}
+
+JPH::RefConst<JPH::Shape> CreateShape(
+    entt::registry& registry,
+    entt::entity entity,
+    const JoltColliderComponent& collider,
+    const Transform& transform)
+{
+    if (collider.shape == JoltColliderShape::Compound) {
+        return CreateCompoundShape(registry, entity, collider, transform);
+    }
+    return CreatePrimitiveShape(collider, transform);
 }
 
 JPH::EMotionType ToJoltMotionType(JoltBodyMotion motion)
@@ -376,6 +533,11 @@ void JoltPhysicsSystem::SyncBodies()
             continue;
         }
 
+        if (FindCompoundAncestor(_registry, entity) != entt::null) {
+            RemoveBody(entity);
+            continue;
+        }
+
         CreateOrUpdateBody(entity);
     }
 }
@@ -386,7 +548,8 @@ void JoltPhysicsSystem::RemoveStaleBodies()
         const entt::entity entity = iterator->first;
         if (_registry.valid(entity) &&
             _registry.all_of<Transform, JoltColliderComponent>(entity) &&
-            !IsEntityDisabled(_registry, entity)) {
+            !IsEntityDisabled(_registry, entity) &&
+            FindCompoundAncestor(_registry, entity) == entt::null) {
             ++iterator;
             continue;
         }
@@ -445,7 +608,10 @@ void JoltPhysicsSystem::CreateOrUpdateBody(entt::entity entity)
         return;
     }
 
-    const auto shape = CreateShape(collider, transform);
+    const auto shape = CreateShape(_registry, entity, collider, transform);
+    if (shape == nullptr) {
+        return;
+    }
     JPH::BodyCreationSettings settings(
         shape,
         ToJoltVec3(transform.position),
@@ -477,8 +643,12 @@ void JoltPhysicsSystem::CreateOrUpdateBody(entt::entity entity)
             collider.radius,
             collider.halfExtents,
             collider.capsuleHalfHeight,
+            collider.cylinderHalfHeight,
             collider.friction,
-            collider.restitution
+            collider.restitution,
+            collider.shape == JoltColliderShape::Compound
+                ? CompoundSignature(_registry, entity)
+                : 0
         });
 }
 
@@ -501,8 +671,13 @@ bool JoltPhysicsSystem::BodyMatchesAuthoring(entt::entity entity) const
         ApproximatelyEqual(body.radius, collider.radius) &&
         ApproximatelyEqual(body.halfExtents, collider.halfExtents) &&
         ApproximatelyEqual(body.capsuleHalfHeight, collider.capsuleHalfHeight) &&
+        ApproximatelyEqual(body.cylinderHalfHeight, collider.cylinderHalfHeight) &&
         ApproximatelyEqual(body.friction, collider.friction) &&
-        ApproximatelyEqual(body.restitution, collider.restitution);
+        ApproximatelyEqual(body.restitution, collider.restitution) &&
+        body.compoundSignature == (
+            collider.shape == JoltColliderShape::Compound
+                ? CompoundSignature(_registry, entity)
+                : 0);
 }
 
 } // namespace Engine
