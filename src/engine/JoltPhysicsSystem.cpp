@@ -22,6 +22,7 @@
 #include <Jolt/Physics/Collision/ObjectLayer.h>
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
 #include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
+#include <Jolt/Physics/Collision/Shape/ConvexHullShape.h>
 #include <Jolt/Physics/Collision/Shape/CylinderShape.h>
 #include <Jolt/Physics/Collision/Shape/RotatedTranslatedShape.h>
 #include <Jolt/Physics/Collision/Shape/Shape.h>
@@ -31,10 +32,13 @@
 #include <Jolt/RegisterTypes.h>
 
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <cmath>
 #include <functional>
+#include <limits>
 #include <thread>
+#include <unordered_set>
 
 namespace Engine {
 namespace {
@@ -169,6 +173,40 @@ glm::vec3 AbsScale(const glm::vec3& scale)
     };
 }
 
+JPH::RefConst<JPH::Shape> CreateConvexHullShape(
+    std::span<const glm::vec3> sourcePoints,
+    const glm::vec3& scale,
+    bool adaptTolerance)
+{
+    if (sourcePoints.size() < 4) {
+        return nullptr;
+    }
+
+    JPH::Array<JPH::Vec3> points;
+    points.reserve(sourcePoints.size());
+    glm::vec3 minimum{ std::numeric_limits<float>::max() };
+    glm::vec3 maximum{ std::numeric_limits<float>::lowest() };
+    for (const glm::vec3& sourcePoint : sourcePoints) {
+        const glm::vec3 point = sourcePoint * scale;
+        minimum = glm::min(minimum, point);
+        maximum = glm::max(maximum, point);
+        points.push_back(ToJoltVec3(point));
+    }
+
+    const float extent = glm::max(glm::length(maximum - minimum), 0.001f);
+    const int attemptCount = adaptTolerance ? 9 : 1;
+    for (int attempt = 0; attempt < attemptCount; ++attempt) {
+        JPH::ConvexHullShapeSettings settings(points, 0.0f);
+        settings.mHullTolerance = extent * 0.0001f * std::pow(2.0f, static_cast<float>(attempt));
+        auto result = settings.Create();
+        if (!result.HasError()) {
+            return result.Get();
+        }
+    }
+
+    return nullptr;
+}
+
 JPH::RefConst<JPH::Shape> CreatePrimitiveShape(const JoltColliderComponent& collider, const Transform& transform)
 {
     const glm::vec3 scale = AbsScale(transform.scale);
@@ -193,6 +231,39 @@ JPH::RefConst<JPH::Shape> CreatePrimitiveShape(const JoltColliderComponent& coll
         shape = new JPH::CylinderShape(halfHeight, radius, convexRadius);
         break;
     }
+    case JoltColliderShape::Cone: {
+        constexpr int ConeSegments = 24;
+        constexpr float TwoPi = 6.28318530718f;
+        const float halfHeight = std::max(0.0001f, collider.coneHalfHeight * scale.y);
+        const float radius = std::max(0.0001f, collider.radius * std::max(scale.x, scale.z));
+        JPH::Array<JPH::Vec3> points;
+        points.reserve(ConeSegments + 1);
+        points.push_back(JPH::Vec3{ 0.0f, halfHeight, 0.0f });
+        for (int segment = 0; segment < ConeSegments; ++segment) {
+            const float angle = TwoPi * static_cast<float>(segment) /
+                static_cast<float>(ConeSegments);
+            points.push_back(JPH::Vec3{
+                std::cos(angle) * radius,
+                -halfHeight,
+                std::sin(angle) * radius
+            });
+        }
+
+        auto result = JPH::ConvexHullShapeSettings(points, 0.0f).Create();
+        if (result.HasError()) {
+            ENGINE_LOG_ERROR("Failed to create Jolt cone shape: " + result.GetError());
+            return nullptr;
+        }
+        shape = result.Get();
+        break;
+    }
+    case JoltColliderShape::ConvexHull:
+        shape = CreateConvexHullShape(collider.convexHullPoints, scale, false);
+        if (shape == nullptr) {
+            ENGINE_LOG_ERROR("Failed to create Jolt convex hull collider.");
+            return nullptr;
+        }
+        break;
     case JoltColliderShape::Compound:
         return nullptr;
     }
@@ -247,6 +318,17 @@ void HashFloat(uint64_t& seed, float value)
     HashCombine(seed, std::bit_cast<uint32_t>(value));
 }
 
+uint64_t ConvexHullSignature(const JoltColliderComponent& collider)
+{
+    uint64_t signature = collider.convexHullPoints.size();
+    for (const glm::vec3& point : collider.convexHullPoints) {
+        HashFloat(signature, point.x);
+        HashFloat(signature, point.y);
+        HashFloat(signature, point.z);
+    }
+    return signature;
+}
+
 uint64_t CompoundSignature(entt::registry& registry, entt::entity root)
 {
     uint64_t signature = 0;
@@ -280,8 +362,12 @@ uint64_t CompoundSignature(entt::registry& registry, entt::entity root)
                  collider.radius,
                  collider.halfExtents.x, collider.halfExtents.y, collider.halfExtents.z,
                  collider.capsuleHalfHeight,
-                 collider.cylinderHalfHeight }) {
+                 collider.cylinderHalfHeight,
+                 collider.coneHalfHeight }) {
             HashFloat(signature, value);
+        }
+        if (collider.shape == JoltColliderShape::ConvexHull) {
+            HashCombine(signature, ConvexHullSignature(collider));
         }
     }
     return signature;
@@ -378,6 +464,61 @@ bool ApproximatelyEqual(const glm::vec3& first, const glm::vec3& second)
 }
 
 } // namespace
+
+std::vector<glm::vec3> BuildJoltConvexHullPoints(std::span<const glm::vec3> sourcePoints)
+{
+    const auto shape = CreateConvexHullShape(sourcePoints, glm::vec3{ 1.0f }, true);
+    if (shape == nullptr || shape->GetSubType() != JPH::EShapeSubType::ConvexHull) {
+        ENGINE_LOG_ERROR("Failed to generate Jolt convex hull points from mesh.");
+        return {};
+    }
+
+    const auto* hull = static_cast<const JPH::ConvexHullShape*>(shape.GetPtr());
+    const glm::vec3 centerOfMass = FromJoltVec3(hull->GetCenterOfMass());
+    std::vector<glm::vec3> points;
+    points.reserve(hull->GetNumPoints());
+    for (JPH::uint index = 0; index < hull->GetNumPoints(); ++index) {
+        points.push_back(FromJoltVec3(hull->GetPoint(index)) + centerOfMass);
+    }
+    return points;
+}
+
+std::vector<JoltConvexHullEdge> BuildJoltConvexHullEdges(
+    std::span<const glm::vec3> hullPoints)
+{
+    const auto shape = CreateConvexHullShape(hullPoints, glm::vec3{ 1.0f }, false);
+    if (shape == nullptr || shape->GetSubType() != JPH::EShapeSubType::ConvexHull) {
+        return {};
+    }
+
+    const auto* hull = static_cast<const JPH::ConvexHullShape*>(shape.GetPtr());
+    const glm::vec3 centerOfMass = FromJoltVec3(hull->GetCenterOfMass());
+    std::unordered_set<uint64_t> visitedEdges;
+    std::vector<JoltConvexHullEdge> edges;
+    for (JPH::uint faceIndex = 0; faceIndex < hull->GetNumFaces(); ++faceIndex) {
+        std::array<JPH::uint, JPH::ConvexHullShape::cMaxPointsInHull> indices{};
+        const JPH::uint count = hull->GetFaceVertices(
+            faceIndex,
+            static_cast<JPH::uint>(indices.size()),
+            indices.data());
+        for (JPH::uint index = 0; index < count; ++index) {
+            const JPH::uint first = indices[index];
+            const JPH::uint second = indices[(index + 1) % count];
+            const JPH::uint low = std::min(first, second);
+            const JPH::uint high = std::max(first, second);
+            const uint64_t edgeKey =
+                (static_cast<uint64_t>(low) << 32u) | static_cast<uint64_t>(high);
+            if (!visitedEdges.insert(edgeKey).second) {
+                continue;
+            }
+            edges.push_back(JoltConvexHullEdge{
+                FromJoltVec3(hull->GetPoint(first)) + centerOfMass,
+                FromJoltVec3(hull->GetPoint(second)) + centerOfMass
+            });
+        }
+    }
+    return edges;
+}
 
 JoltPhysicsSystem::JoltPhysicsSystem(entt::registry& registry, Core* core)
     : System(registry)
@@ -644,8 +785,12 @@ void JoltPhysicsSystem::CreateOrUpdateBody(entt::entity entity)
             collider.halfExtents,
             collider.capsuleHalfHeight,
             collider.cylinderHalfHeight,
+            collider.coneHalfHeight,
             collider.friction,
             collider.restitution,
+            collider.shape == JoltColliderShape::ConvexHull
+                ? ConvexHullSignature(collider)
+                : 0,
             collider.shape == JoltColliderShape::Compound
                 ? CompoundSignature(_registry, entity)
                 : 0
@@ -672,8 +817,13 @@ bool JoltPhysicsSystem::BodyMatchesAuthoring(entt::entity entity) const
         ApproximatelyEqual(body.halfExtents, collider.halfExtents) &&
         ApproximatelyEqual(body.capsuleHalfHeight, collider.capsuleHalfHeight) &&
         ApproximatelyEqual(body.cylinderHalfHeight, collider.cylinderHalfHeight) &&
+        ApproximatelyEqual(body.coneHalfHeight, collider.coneHalfHeight) &&
         ApproximatelyEqual(body.friction, collider.friction) &&
         ApproximatelyEqual(body.restitution, collider.restitution) &&
+        body.convexHullSignature == (
+            collider.shape == JoltColliderShape::ConvexHull
+                ? ConvexHullSignature(collider)
+                : 0) &&
         body.compoundSignature == (
             collider.shape == JoltColliderShape::Compound
                 ? CompoundSignature(_registry, entity)

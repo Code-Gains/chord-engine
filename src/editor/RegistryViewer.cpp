@@ -8,6 +8,7 @@
 #include "EditorSelection.h"
 #include "EditorInteractionState.h"
 #include "EditorHistory.h"
+#include "EditorAssetEvents.h"
 #include "EntityState.h"
 #include "InputSystem.h"
 #include "MeshComponent.h"
@@ -21,7 +22,9 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <filesystem>
 #include <limits>
+#include <string_view>
 #include <vector>
 
 #include <glm/gtc/matrix_inverse.hpp>
@@ -268,6 +271,65 @@ namespace {
         }
 
         return baseName + " Copy";
+    }
+
+    std::string MakePrefabFileStem(std::string_view name)
+    {
+        std::string stem;
+        stem.reserve(name.size());
+        bool previousUnderscore = false;
+
+        for (const unsigned char character : name) {
+            const bool alphaNumeric = std::isalnum(character) != 0;
+            if (alphaNumeric || character == '-' || character == '_') {
+                stem.push_back(static_cast<char>(std::tolower(character)));
+                previousUnderscore = false;
+            }
+            else if (!previousUnderscore && !stem.empty()) {
+                stem.push_back('_');
+                previousUnderscore = true;
+            }
+        }
+
+        while (!stem.empty() && stem.back() == '_') {
+            stem.pop_back();
+        }
+
+        return stem.empty() ? "new_prefab" : stem;
+    }
+
+    std::optional<std::filesystem::path> BuildPrefabProjectPath(std::string_view enteredName)
+    {
+        std::string name(enteredName);
+        while (!name.empty() && std::isspace(static_cast<unsigned char>(name.front()))) {
+            name.erase(name.begin());
+        }
+        while (!name.empty() && std::isspace(static_cast<unsigned char>(name.back()))) {
+            name.pop_back();
+        }
+
+        if (name.empty()) {
+            return std::nullopt;
+        }
+
+        const std::filesystem::path namePath(name);
+        if (namePath.has_parent_path() || namePath.filename() == "." || namePath.filename() == "..") {
+            return std::nullopt;
+        }
+
+        constexpr std::string_view invalidCharacters = "<>:\"/\\|?*";
+        if (name.find_first_of(invalidCharacters) != std::string::npos) {
+            return std::nullopt;
+        }
+
+        if (namePath.extension() == ".json") {
+            name = namePath.stem().string();
+        }
+        if (name.empty()) {
+            return std::nullopt;
+        }
+
+        return std::filesystem::path("assets/prefabs") / (name + ".json");
     }
 }
 
@@ -557,6 +619,8 @@ void RegistryViewer::DrawUi()
             }
             ImGui::EndDragDropTarget();
         }
+
+        DrawCreatePrefabDialog();
     }
 
     ImGui::End();
@@ -679,6 +743,145 @@ bool RegistryViewer::DeleteSelectedEntityWithHistory()
     return true;
 }
 
+void RegistryViewer::OpenCreatePrefabDialog(entt::entity entity)
+{
+    if (!_core || entity == entt::null || !_registry.valid(entity) ||
+        _registry.all_of<Engine::CoreOwnedTag>(entity)) {
+        return;
+    }
+
+    const std::string sourceName = _registry.all_of<NameComponent>(entity)
+        ? _registry.get<NameComponent>(entity).name
+        : std::string("new_prefab");
+    const std::string suggestedName = MakePrefabFileStem(sourceName);
+
+    _prefabNameBuffer.fill('\0');
+    const size_t copyLength = std::min(suggestedName.size(), _prefabNameBuffer.size() - 1);
+    std::copy_n(suggestedName.data(), copyLength, _prefabNameBuffer.data());
+    _prefabSourceEntity = entity;
+    _prefabDialogError.clear();
+    _confirmPrefabOverwrite = false;
+    _openCreatePrefabDialog = true;
+}
+
+void RegistryViewer::DrawCreatePrefabDialog()
+{
+    if (_openCreatePrefabDialog) {
+        ImGui::OpenPopup("Create Prefab");
+        _openCreatePrefabDialog = false;
+    }
+
+    if (!ImGui::BeginPopupModal("Create Prefab", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        return;
+    }
+
+    if (_prefabSourceEntity == entt::null || !_registry.valid(_prefabSourceEntity)) {
+        ImGui::TextUnformatted("The source entity no longer exists.");
+        if (ImGui::Button("Close")) {
+            ImGui::CloseCurrentPopup();
+            _prefabSourceEntity = entt::null;
+        }
+        ImGui::EndPopup();
+        return;
+    }
+
+    ImGui::TextUnformatted("Save the selected entity and its child hierarchy as a prefab.");
+    ImGui::SetNextItemWidth(360.0f);
+    if (ImGui::InputText("Name", _prefabNameBuffer.data(), _prefabNameBuffer.size())) {
+        _prefabDialogError.clear();
+        _confirmPrefabOverwrite = false;
+    }
+
+    const auto projectPath = BuildPrefabProjectPath(_prefabNameBuffer.data());
+    if (projectPath) {
+        ImGui::TextDisabled("%s", projectPath->generic_string().c_str());
+    }
+    else {
+        ImGui::TextDisabled("assets/prefabs/<name>.json");
+    }
+
+    if (!_prefabDialogError.empty()) {
+        ImGui::TextColored(
+            ImVec4{ 1.0f, 0.35f, 0.25f, 1.0f },
+            "%s",
+            _prefabDialogError.c_str());
+    }
+
+    if (_confirmPrefabOverwrite) {
+        ImGui::TextColored(
+            ImVec4{ 1.0f, 0.72f, 0.2f, 1.0f },
+            "A prefab with this name already exists.");
+        if (ImGui::Button("Overwrite")) {
+            SavePrefabFromDialog(true);
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Keep Existing")) {
+            _confirmPrefabOverwrite = false;
+        }
+    }
+    else if (ImGui::Button("Create")) {
+        SavePrefabFromDialog(false);
+    }
+
+    ImGui::SameLine();
+    if (ImGui::Button("Cancel")) {
+        ImGui::CloseCurrentPopup();
+        _prefabSourceEntity = entt::null;
+        _confirmPrefabOverwrite = false;
+    }
+
+    ImGui::EndPopup();
+}
+
+bool RegistryViewer::SavePrefabFromDialog(bool overwriteConfirmed)
+{
+    const auto projectPath = BuildPrefabProjectPath(_prefabNameBuffer.data());
+    if (!projectPath) {
+        _prefabDialogError = "Enter a valid file name.";
+        return false;
+    }
+
+    if (!_core || _prefabSourceEntity == entt::null || !_registry.valid(_prefabSourceEntity)) {
+        _prefabDialogError = "The source entity is no longer available.";
+        return false;
+    }
+
+    const std::filesystem::path absolutePath = _core->ResolveProjectPath(*projectPath);
+    std::error_code error;
+    const bool alreadyExists = std::filesystem::exists(absolutePath, error);
+    if (error) {
+        _prefabDialogError = "Could not inspect the prefab destination.";
+        return false;
+    }
+    if (alreadyExists && !overwriteConfirmed) {
+        _confirmPrefabOverwrite = true;
+        _prefabDialogError.clear();
+        return false;
+    }
+
+    std::filesystem::create_directories(absolutePath.parent_path(), error);
+    if (error) {
+        _prefabDialogError = "Could not create the prefabs folder.";
+        return false;
+    }
+
+    auto serializer = _core->CreateWorldSerializer();
+    if (!serializer.SavePrefab(*_core, _prefabSourceEntity, absolutePath)) {
+        _prefabDialogError = "Failed to serialize the prefab.";
+        return false;
+    }
+
+    if (!_registry.ctx().contains<EditorAssetRefreshRequest>()) {
+        _registry.ctx().emplace<EditorAssetRefreshRequest>();
+    }
+    _registry.ctx().get<EditorAssetRefreshRequest>().requested = true;
+
+    ImGui::CloseCurrentPopup();
+    _prefabSourceEntity = entt::null;
+    _confirmPrefabOverwrite = false;
+    return true;
+}
+
 void RegistryViewer::DrawEntityNode(entt::entity entity)
 {
     if (!_registry.valid(entity) || !_registry.all_of<Transform>(entity)) {
@@ -749,6 +952,16 @@ void RegistryViewer::DrawEntityNode(entt::entity entity)
         !ImGui::IsItemToggledOpen() &&
         ImGui::GetDragDropPayload() == nullptr) {
         SetSelectedEntity(entity);
+    }
+
+    if (ImGui::BeginPopupContextItem("EntityContextMenu")) {
+        SetSelectedEntity(entity);
+        const bool canCreatePrefab = _core != nullptr &&
+            !_registry.all_of<Engine::CoreOwnedTag>(entity);
+        if (ImGui::MenuItem("Create Prefab...", nullptr, false, canCreatePrefab)) {
+            OpenCreatePrefabDialog(entity);
+        }
+        ImGui::EndPopup();
     }
 
     if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {

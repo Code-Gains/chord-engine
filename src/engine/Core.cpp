@@ -355,9 +355,14 @@ bool Core::PlayProjectAudioOneShot(
 AudioLoopHandle Core::StartProjectAudioLoop(
     const std::filesystem::path& path,
     float gain,
-    float pitch)
+    float pitch,
+    float normalizedStartOffset)
 {
-    return _audioSystem.StartWavLoop(ResolveProjectPath(path), gain, pitch);
+    return _audioSystem.StartWavLoop(
+        ResolveProjectPath(path),
+        gain,
+        pitch,
+        normalizedStartOffset);
 }
 
 bool Core::UpdateProjectAudioLoop(

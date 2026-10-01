@@ -698,7 +698,8 @@ public:
     AudioLoopHandle StartProjectAudioLoop(
         const std::filesystem::path& path,
         float gain = 1.0f,
-        float pitch = 1.0f);
+        float pitch = 1.0f,
+        float normalizedStartOffset = 0.0f);
     bool UpdateProjectAudioLoop(AudioLoopHandle handle, float gain, float pitch);
     void StopProjectAudioLoop(AudioLoopHandle handle);
     bool PlayProjectSoundCue(

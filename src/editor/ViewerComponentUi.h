@@ -17,6 +17,7 @@
 #include "Core.h"
 #include "EnvironmentComponent.h"
 #include "NameComponent.h"
+#include "PrefabComponents.h"
 #include "ScreenPostProcessComponent.h"
 #include "SunlightComponent.h"
 #include "Camera.h"
@@ -28,6 +29,7 @@
 #include "JoltPhysicsComponents.h"
 #include "CameraShotEditorUi.h"
 #include "EditorUiLayout.h"
+#include "EditorAssetPayloads.h"
 
 namespace EditorUi {
 
@@ -449,6 +451,22 @@ public:
 
             ImGui::Text("Path: %s", source.path.c_str());
             ImGui::Text("Mesh Index: %u", source.meshIndex);
+            ImGui::Button("Drop Mesh Here", ImVec2(-1.0f, 0.0f));
+            if (ImGui::BeginDragDropTarget()) {
+                if (const ImGuiPayload* payload =
+                        ImGui::AcceptDragDropPayload("ENGINE_MESH_ASSET")) {
+                    const auto& meshPayload =
+                        *static_cast<const EditorMeshAssetPayload*>(payload->Data);
+                    if (_core) {
+                        auto meshes = _core->LoadGltfMeshes(_core, meshPayload.projectPath);
+                        if (meshes && meshPayload.meshIndex < meshes->size()) {
+                            mesh->mesh = meshes->at(meshPayload.meshIndex);
+                            mesh->source = mesh->mesh->source;
+                        }
+                    }
+                }
+                ImGui::EndDragDropTarget();
+            }
             EditorUi::ScopedItemWidth width{ 320.0f };
 
             const char* currentMaterial =
@@ -546,6 +564,24 @@ public:
     }
 };
 
+class PrefabPlacementAnchorComponentUi : public ViewerComponentUi {
+public:
+    void Draw(entt::registry& registry, entt::entity entity) override {
+        if (!registry.all_of<PrefabPlacementAnchorComponent>(entity))
+            return;
+
+        if (DrawRemovableComponentHeader<PrefabPlacementAnchorComponent>(
+                registry,
+                entity,
+                "Prefab Placement Anchor",
+                "PrefabPlacementAnchorComponent"))
+        {
+            ImGui::TextWrapped(
+                "This entity's transform origin is used as the prefab placement point.");
+        }
+    }
+};
+
 class ActiveCameraTagUi : public ViewerComponentUi {
 public:
     void Draw(entt::registry& registry, entt::entity entity) override {
@@ -637,9 +673,17 @@ public:
             EditorUi::ScopedItemWidth width{ 260.0f };
 
             int shapeIndex = static_cast<int>(collider->shape);
-            constexpr const char* shapeLabels[] { "Sphere", "Box", "Capsule", "Cylinder", "Compound" };
+            constexpr const char* shapeLabels[] { "Sphere", "Box", "Capsule", "Cylinder", "Cone", "Convex Hull", "Compound" };
             if (ImGui::Combo("Shape##JoltColliderShape", &shapeIndex, shapeLabels, IM_ARRAYSIZE(shapeLabels))) {
                 collider->shape = static_cast<Engine::JoltColliderShape>(shapeIndex);
+                if (collider->shape == Engine::JoltColliderShape::ConvexHull &&
+                    collider->convexHullPoints.empty()) {
+                    const auto* mesh = registry.try_get<MeshComponent>(entity);
+                    if (mesh && mesh->mesh && !mesh->mesh->pickingPositions.empty()) {
+                        collider->convexHullPoints = Engine::BuildJoltConvexHullPoints(
+                            mesh->mesh->pickingPositions);
+                    }
+                }
             }
 
             int motionIndex = static_cast<int>(collider->motion);
@@ -666,6 +710,25 @@ public:
                 ImGui::DragFloat("Radius##JoltColliderCylinderRadius", &collider->radius, 0.01f, 0.001f, 100000.0f);
                 ImGui::DragFloat("Half Height##JoltColliderCylinderHalfHeight", &collider->cylinderHalfHeight, 0.01f, 0.001f, 100000.0f);
                 break;
+            case Engine::JoltColliderShape::Cone:
+                ImGui::DragFloat("Radius##JoltColliderConeRadius", &collider->radius, 0.01f, 0.001f, 100000.0f);
+                ImGui::DragFloat("Half Height##JoltColliderConeHalfHeight", &collider->coneHalfHeight, 0.01f, 0.001f, 100000.0f);
+                break;
+            case Engine::JoltColliderShape::ConvexHull: {
+                const auto* mesh = registry.try_get<MeshComponent>(entity);
+                const bool canGenerate =
+                    mesh && mesh->mesh && !mesh->mesh->pickingPositions.empty();
+                ImGui::TextDisabled(
+                    "Hull points: %zu",
+                    collider->convexHullPoints.size());
+                ImGui::BeginDisabled(!canGenerate);
+                if (ImGui::Button("Generate From Mesh##JoltColliderConvexHullGenerate")) {
+                    collider->convexHullPoints = Engine::BuildJoltConvexHullPoints(
+                        mesh->mesh->pickingPositions);
+                }
+                ImGui::EndDisabled();
+                break;
+            }
             case Engine::JoltColliderShape::Compound:
                 ImGui::TextDisabled("Uses primitive collider descendants");
                 break;

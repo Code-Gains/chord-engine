@@ -209,6 +209,66 @@ namespace {
         AddDebugLine(registry, ToWorldPoint(transform, center, top + glm::vec3{ 0.0f, 0.0f, -radius }), ToWorldPoint(transform, center, bottom + glm::vec3{ 0.0f, 0.0f, -radius }), color);
     }
 
+    void DrawConeCollider(
+        entt::registry& registry,
+        const Transform& transform,
+        const Engine::JoltColliderComponent& collider,
+        const glm::vec4& color)
+    {
+        const glm::vec3 scale = AbsScale(transform.scale);
+        const glm::vec3 center = collider.center * scale;
+        const float radius = std::max(0.0001f, collider.radius * std::max(scale.x, scale.z));
+        const float halfHeight = std::max(0.0001f, collider.coneHalfHeight * scale.y);
+        const glm::vec3 apex{ 0.0f, halfHeight, 0.0f };
+        const glm::vec3 base{ 0.0f, -halfHeight, 0.0f };
+
+        DrawCircle(
+            registry,
+            transform,
+            center + base,
+            glm::vec3{ 1.0f, 0.0f, 0.0f },
+            glm::vec3{ 0.0f, 0.0f, 1.0f },
+            radius,
+            color);
+
+        constexpr std::array<glm::vec3, 8> baseDirections {{
+            glm::vec3{ 1.0f, 0.0f, 0.0f },
+            glm::vec3{ 0.70710678f, 0.0f, 0.70710678f },
+            glm::vec3{ 0.0f, 0.0f, 1.0f },
+            glm::vec3{ -0.70710678f, 0.0f, 0.70710678f },
+            glm::vec3{ -1.0f, 0.0f, 0.0f },
+            glm::vec3{ -0.70710678f, 0.0f, -0.70710678f },
+            glm::vec3{ 0.0f, 0.0f, -1.0f },
+            glm::vec3{ 0.70710678f, 0.0f, -0.70710678f }
+        }};
+        const glm::vec3 worldApex = ToWorldPoint(transform, center, apex);
+        for (const glm::vec3& direction : baseDirections) {
+            AddDebugLine(
+                registry,
+                worldApex,
+                ToWorldPoint(transform, center, base + direction * radius),
+                color);
+        }
+    }
+
+    void DrawConvexHullCollider(
+        entt::registry& registry,
+        const Transform& transform,
+        const Engine::JoltColliderComponent& collider,
+        const glm::vec4& color)
+    {
+        const glm::vec3 scale = AbsScale(transform.scale);
+        const glm::vec3 center = collider.center * scale;
+        const auto edges = Engine::BuildJoltConvexHullEdges(collider.convexHullPoints);
+        for (const auto& edge : edges) {
+            AddDebugLine(
+                registry,
+                ToWorldPoint(transform, center, edge.start * scale),
+                ToWorldPoint(transform, center, edge.end * scale),
+                color);
+        }
+    }
+
     glm::vec4 ResolveColliderColor(const Engine::JoltColliderComponent& collider)
     {
         if (collider.sensor) {
@@ -259,6 +319,12 @@ void JoltColliderDebugDrawSystem::Update(float)
             break;
         case Engine::JoltColliderShape::Cylinder:
             DrawCylinderCollider(_registry, transform, collider, color);
+            break;
+        case Engine::JoltColliderShape::Cone:
+            DrawConeCollider(_registry, transform, collider, color);
+            break;
+        case Engine::JoltColliderShape::ConvexHull:
+            DrawConvexHullCollider(_registry, transform, collider, color);
             break;
         case Engine::JoltColliderShape::Compound:
             break;

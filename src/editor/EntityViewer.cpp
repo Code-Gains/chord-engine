@@ -3,6 +3,7 @@
 #include "Camera.h"
 #include "Core.h"
 #include "NameComponent.h"
+#include "PrefabComponents.h"
 #include "SunlightComponent.h"
 #include "Transform.h"
 #include "MeshComponent.h"
@@ -13,10 +14,62 @@
 #include "LineComponent.h"
 
 #include <algorithm>
+#include <cctype>
 #include <glm/gtx/quaternion.hpp>
 #include <string>
+#include <string_view>
 
 namespace {
+
+bool MatchesComponentSearch(std::string_view candidate, std::string_view query)
+{
+    if (query.empty()) {
+        return true;
+    }
+
+    size_t queryIndex = 0;
+    for (const unsigned char character : candidate) {
+        if (queryIndex < query.size() &&
+            std::tolower(character) ==
+                std::tolower(static_cast<unsigned char>(query[queryIndex]))) {
+            ++queryIndex;
+        }
+    }
+
+    return queryIndex == query.size();
+}
+
+std::string DefaultComponentCategory(std::string_view label)
+{
+    if (label == "Name" || label == "Transform") {
+        return "Core";
+    }
+    if (label == "Single Render Tag" ||
+        label == "Prefab Placement Anchor" ||
+        label == "Active Camera") {
+        return "Tags";
+    }
+    if (label == "Environment" ||
+        label == "Sunlight" ||
+        label == "Screen Post Process" ||
+        label == "Screen Post Process Source" ||
+        label == "Camera" ||
+        label == "Cinematic Camera Shot" ||
+        label == "Mesh" ||
+        label == "Mesh Corruption" ||
+        label == "Effect Mesh") {
+        return "Rendering";
+    }
+    if (label == "Velocity" ||
+        label == "Gravity Body" ||
+        label == "Gravity Particle" ||
+        label == "Jolt Collider" ||
+        label.ends_with("Collider") ||
+        label.ends_with("Collider Root")) {
+        return "Physics";
+    }
+    return "Gameplay";
+}
 
 bool SerializedComponentsEqual(
     const Engine::Serialization::SerializedEntity& left,
@@ -437,31 +490,12 @@ void EntityViewer::DrawUi()
             }
 
             if (ImGui::Button("+ Component")) {
+                _componentSearchBuffer.fill('\0');
+                _componentPickerSelection = 0;
                 ImGui::OpenPopup("AddComponentPopup");
             }
 
-            if (ImGui::BeginPopup("AddComponentPopup"))
-            {
-                bool hasAvailableComponent = false;
-
-                for (const auto& entry : _componentMenuEntries) {
-                    if (!entry.canAdd(_registry, selectedEntity)) {
-                        continue;
-                    }
-
-                    hasAvailableComponent = true;
-                    if (ImGui::MenuItem(entry.label.c_str())) {
-                        entry.add(_registry, selectedEntity);
-                        ImGui::CloseCurrentPopup();
-                    }
-                }
-
-                if (!hasAvailableComponent) {
-                    ImGui::MenuItem("All basic components added", nullptr, false, false);
-                }
-
-                ImGui::EndPopup();
-            }
+            DrawAddComponentPopup(selectedEntity);
 
             ImGui::Separator();
 
@@ -527,6 +561,153 @@ void EntityViewer::DrawUi()
     windowRegistry.SetWindowOpen("Entity Viewer", open);
 }
 
+void EntityViewer::DrawAddComponentPopup(entt::entity selectedEntity)
+{
+    ImGui::SetNextWindowSize(ImVec2(420.0f, 460.0f), ImGuiCond_Appearing);
+    if (!ImGui::BeginPopup("AddComponentPopup")) {
+        return;
+    }
+
+    if (ImGui::IsWindowAppearing()) {
+        ImGui::SetKeyboardFocusHere();
+    }
+
+    const std::string previousSearch = _componentSearchBuffer.data();
+    ImGui::SetNextItemWidth(-1.0f);
+    const bool submitSearch = ImGui::InputTextWithHint(
+        "##ComponentSearch",
+        "Search components...",
+        _componentSearchBuffer.data(),
+        _componentSearchBuffer.size(),
+        ImGuiInputTextFlags_EnterReturnsTrue);
+    const std::string search = _componentSearchBuffer.data();
+    if (search != previousSearch) {
+        _componentPickerSelection = 0;
+    }
+
+    std::vector<const ComponentMenuEntry*> availableEntries;
+    availableEntries.reserve(_componentMenuEntries.size());
+    for (const auto& entry : _componentMenuEntries) {
+        if (entry.canAdd(_registry, selectedEntity) &&
+            MatchesComponentSearch(entry.label, search)) {
+            availableEntries.push_back(&entry);
+        }
+    }
+
+    if (search.empty()) {
+        std::vector<std::string_view> categories;
+        for (const auto* entry : availableEntries) {
+            if (std::find(categories.begin(), categories.end(), entry->category) ==
+                categories.end()) {
+                categories.emplace_back(entry->category);
+            }
+        }
+
+        std::vector<const ComponentMenuEntry*> categorizedEntries;
+        categorizedEntries.reserve(availableEntries.size());
+        for (const std::string_view category : categories) {
+            for (const auto* entry : availableEntries) {
+                if (entry->category == category) {
+                    categorizedEntries.push_back(entry);
+                }
+            }
+        }
+        availableEntries = std::move(categorizedEntries);
+    }
+
+    if (availableEntries.empty()) {
+        _componentPickerSelection = 0;
+    }
+    else {
+        _componentPickerSelection = std::clamp(
+            _componentPickerSelection,
+            0,
+            static_cast<int>(availableEntries.size()) - 1);
+
+        if (ImGui::IsKeyPressed(ImGuiKey_DownArrow, false)) {
+            _componentPickerSelection = std::min(
+                _componentPickerSelection + 1,
+                static_cast<int>(availableEntries.size()) - 1);
+        }
+        if (ImGui::IsKeyPressed(ImGuiKey_UpArrow, false)) {
+            _componentPickerSelection = std::max(_componentPickerSelection - 1, 0);
+        }
+    }
+
+    const auto addEntry = [&](const ComponentMenuEntry& entry) {
+        entry.add(_registry, selectedEntity);
+        ImGui::CloseCurrentPopup();
+    };
+
+    if (submitSearch && !availableEntries.empty()) {
+        addEntry(*availableEntries[_componentPickerSelection]);
+        ImGui::EndPopup();
+        return;
+    }
+
+    ImGui::Separator();
+    ImGui::BeginChild(
+        "ComponentPickerResults",
+        ImVec2(0.0f, 0.0f),
+        false,
+        ImGuiWindowFlags_AlwaysVerticalScrollbar);
+
+    if (availableEntries.empty()) {
+        ImGui::TextDisabled(search.empty()
+            ? "All available components have been added."
+            : "No matching components.");
+    }
+    else if (!search.empty()) {
+        for (size_t index = 0; index < availableEntries.size(); ++index) {
+            const auto& entry = *availableEntries[index];
+            const bool selected = static_cast<int>(index) == _componentPickerSelection;
+            if (ImGui::Selectable(entry.label.c_str(), selected)) {
+                addEntry(entry);
+                break;
+            }
+            if (selected &&
+                (ImGui::IsKeyPressed(ImGuiKey_DownArrow, false) ||
+                    ImGui::IsKeyPressed(ImGuiKey_UpArrow, false))) {
+                ImGui::SetScrollHereY(0.5f);
+            }
+        }
+    }
+    else {
+        std::vector<std::string_view> categories;
+        for (const auto* entry : availableEntries) {
+            if (std::find(categories.begin(), categories.end(), entry->category) ==
+                categories.end()) {
+                categories.emplace_back(entry->category);
+            }
+        }
+
+        size_t flatIndex = 0;
+        for (const std::string_view category : categories) {
+            ImGui::SeparatorText(category.data());
+            for (const auto* entry : availableEntries) {
+                if (entry->category != category) {
+                    continue;
+                }
+
+                const bool selected = static_cast<int>(flatIndex) == _componentPickerSelection;
+                if (ImGui::Selectable(entry->label.c_str(), selected)) {
+                    addEntry(*entry);
+                    break;
+                }
+                if (selected &&
+                    (ImGui::IsKeyPressed(ImGuiKey_DownArrow, false) ||
+                        ImGui::IsKeyPressed(ImGuiKey_UpArrow, false))) {
+                    ImGui::SetScrollHereY(0.5f);
+                }
+                ++flatIndex;
+            }
+        }
+    }
+
+    ImGui::EndChild();
+    ImGui::EndPopup();
+}
+
 EntityViewer::EntityViewer(entt::registry &registry, RegistryViewer* registryViewerPtr, Engine::Core* core)
     : System(registry)
     , _registryViewerPtr(registryViewerPtr)
@@ -545,6 +726,7 @@ EntityViewer::EntityViewer(entt::registry &registry, RegistryViewer* registryVie
     _componentUis.push_back(std::make_unique<MeshCorruptionComponentUi>());
     _componentUis.push_back(std::make_unique<EffectMeshComponentUi>());
     _componentUis.push_back(std::make_unique<SingleRenderTagUi>());
+    _componentUis.push_back(std::make_unique<PrefabPlacementAnchorComponentUi>());
     _componentUis.push_back(std::make_unique<ActiveCameraTagUi>());
     _componentUis.push_back(std::make_unique<VelocityComponentUi>());
     _componentUis.push_back(std::make_unique<GravityBodyComponentUi>());
@@ -650,6 +832,17 @@ EntityViewer::EntityViewer(entt::registry &registry, RegistryViewer* registryVie
         },
         [](entt::registry& registry, entt::entity entity) {
             registry.emplace<SingleRenderTag>(entity);
+        }
+    );
+
+    AddComponentMenuItem(
+        "Prefab Placement Anchor",
+        [](entt::registry& registry, entt::entity entity) {
+            return registry.all_of<Transform>(entity) &&
+                !registry.all_of<PrefabPlacementAnchorComponent>(entity);
+        },
+        [](entt::registry& registry, entt::entity entity) {
+            registry.emplace<PrefabPlacementAnchorComponent>(entity);
         }
     );
 
@@ -799,6 +992,39 @@ EntityViewer::EntityViewer(entt::registry &registry, RegistryViewer* registryVie
     );
 
     AddComponentMenuItem(
+        "Static Cone Collider",
+        [](entt::registry& registry, entt::entity entity) {
+            return registry.all_of<Transform>(entity) &&
+                   !registry.all_of<Engine::JoltColliderComponent>(entity);
+        },
+        [](entt::registry& registry, entt::entity entity) {
+            auto& collider = registry.emplace<Engine::JoltColliderComponent>(entity);
+            collider.shape = Engine::JoltColliderShape::Cone;
+            collider.motion = Engine::JoltBodyMotion::Static;
+            collider.radius = 0.5f;
+            collider.coneHalfHeight = 0.5f;
+        }
+    );
+
+    AddComponentMenuItem(
+        "Static Convex Hull Collider",
+        [](entt::registry& registry, entt::entity entity) {
+            return registry.all_of<Transform, MeshComponent>(entity) &&
+                   !registry.all_of<Engine::JoltColliderComponent>(entity);
+        },
+        [](entt::registry& registry, entt::entity entity) {
+            auto& collider = registry.emplace<Engine::JoltColliderComponent>(entity);
+            collider.shape = Engine::JoltColliderShape::ConvexHull;
+            collider.motion = Engine::JoltBodyMotion::Static;
+            const auto& mesh = registry.get<MeshComponent>(entity);
+            if (mesh.mesh && !mesh.mesh->pickingPositions.empty()) {
+                collider.convexHullPoints = Engine::BuildJoltConvexHullPoints(
+                    mesh.mesh->pickingPositions);
+            }
+        }
+    );
+
+    AddComponentMenuItem(
         "Static Compound Collider Root",
         [](entt::registry& registry, entt::entity entity) {
             return registry.all_of<Transform>(entity) &&
@@ -827,10 +1053,16 @@ void EntityViewer::AddComponentUi(std::unique_ptr<ViewerComponentUi> componentUi
 void EntityViewer::AddComponentMenuItem(
     std::string label,
     std::function<bool(entt::registry&, entt::entity)> canAdd,
-    std::function<void(entt::registry&, entt::entity)> add)
+    std::function<void(entt::registry&, entt::entity)> add,
+    std::string category)
 {
+    if (category.empty()) {
+        category = DefaultComponentCategory(label);
+    }
+
     _componentMenuEntries.push_back(ComponentMenuEntry {
         std::move(label),
+        std::move(category),
         std::move(canAdd),
         std::move(add)
     });

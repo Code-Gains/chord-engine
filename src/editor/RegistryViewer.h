@@ -1,7 +1,9 @@
 #pragma once
 #include <engine/System.h>
 #include <entt/entt.hpp>
+#include <array>
 #include <optional>
+#include <string>
 #include "ViewerComponentUi.h"
 #include "WorldSerializer.h"
 
@@ -19,12 +21,20 @@ class RegistryViewer : public System {
     bool _showEntityIds = false;
     Engine::Core* _core = nullptr;
     std::optional<Engine::Serialization::SerializedEntityHierarchy> _copiedEntity;
+    entt::entity _prefabSourceEntity{ entt::null };
+    std::array<char, 256> _prefabNameBuffer{};
+    std::string _prefabDialogError;
+    bool _openCreatePrefabDialog = false;
+    bool _confirmPrefabOverwrite = false;
 
     bool CanCopySelectedEntity() const;
     bool CanPasteEntity() const;
     bool CopySelectedEntity();
     bool PasteCopiedEntity();
     bool DeleteSelectedEntityWithHistory();
+    void OpenCreatePrefabDialog(entt::entity entity);
+    void DrawCreatePrefabDialog();
+    bool SavePrefabFromDialog(bool overwriteConfirmed);
     void DrawEntityNode(entt::entity entity);
 
 

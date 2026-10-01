@@ -40,7 +40,8 @@ public:
     AudioLoopHandle StartWavLoop(
         const std::filesystem::path& path,
         float gain = 1.0f,
-        float pitch = 1.0f);
+        float pitch = 1.0f,
+        float normalizedStartOffset = 0.0f);
     bool SetLoopParameters(AudioLoopHandle handle, float gain, float pitch);
     void StopLoop(AudioLoopHandle handle);
     bool PlaySoundCue(

@@ -257,7 +257,7 @@ bool AudioSystem::PlayWavOneShot(
     ALuint source = 0;
     alGenSources(1, &source);
     alSourcei(source, AL_BUFFER, static_cast<ALint>(buffer));
-    alSourcef(source, AL_GAIN, std::clamp(gain, 0.0f, 4.0f));
+    alSourcef(source, AL_GAIN, std::clamp(gain, 0.0f, 16.0f));
     alSourcef(source, AL_PITCH, std::clamp(pitch, 0.25f, 4.0f));
     alSourcePlay(source);
     if (alGetError() != AL_NO_ERROR) {
@@ -309,7 +309,8 @@ ALuint AudioSystem::GetOrLoadWavBuffer(const std::filesystem::path& path)
 AudioLoopHandle AudioSystem::StartWavLoop(
     const std::filesystem::path& path,
     float gain,
-    float pitch)
+    float pitch,
+    float normalizedStartOffset)
 {
     if (!initialized_) {
         return InvalidAudioLoopHandle;
@@ -324,8 +325,24 @@ AudioLoopHandle AudioSystem::StartWavLoop(
     alGenSources(1, &source);
     alSourcei(source, AL_BUFFER, static_cast<ALint>(buffer));
     alSourcei(source, AL_LOOPING, AL_TRUE);
-    alSourcef(source, AL_GAIN, std::clamp(gain, 0.0f, 4.0f));
+    alSourcef(source, AL_GAIN, std::clamp(gain, 0.0f, 16.0f));
     alSourcef(source, AL_PITCH, std::clamp(pitch, 0.25f, 4.0f));
+
+    ALint bufferSize = 0;
+    ALint channelCount = 0;
+    ALint bitsPerSample = 0;
+    alGetBufferi(buffer, AL_SIZE, &bufferSize);
+    alGetBufferi(buffer, AL_CHANNELS, &channelCount);
+    alGetBufferi(buffer, AL_BITS, &bitsPerSample);
+    const ALint bytesPerFrame = channelCount * bitsPerSample / 8;
+    if (bytesPerFrame > 0 && bufferSize > bytesPerFrame) {
+        const ALint sampleFrameCount = bufferSize / bytesPerFrame;
+        const float clampedOffset = std::clamp(normalizedStartOffset, 0.0f, 0.999f);
+        alSourcei(
+            source,
+            AL_SAMPLE_OFFSET,
+            static_cast<ALint>(static_cast<float>(sampleFrameCount) * clampedOffset));
+    }
     alSourcePlay(source);
     if (alGetError() != AL_NO_ERROR) {
         alDeleteSources(1, &source);
@@ -350,7 +367,7 @@ bool AudioSystem::SetLoopParameters(
         return false;
     }
 
-    alSourcef(loop->second, AL_GAIN, std::clamp(gain, 0.0f, 4.0f));
+    alSourcef(loop->second, AL_GAIN, std::clamp(gain, 0.0f, 16.0f));
     alSourcef(loop->second, AL_PITCH, std::clamp(pitch, 0.25f, 4.0f));
     return alGetError() == AL_NO_ERROR;
 }

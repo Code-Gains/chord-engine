@@ -11,6 +11,7 @@
 #include "Log.h"
 #include "MeshComponent.h"
 #include "NameComponent.h"
+#include "PrefabComponents.h"
 #include "ScreenPostProcessComponent.h"
 #include "SunlightComponent.h"
 #include "Transform.h"
@@ -179,6 +180,10 @@ const char* JoltColliderShapeToString(JoltColliderShape shape)
         return "Capsule";
     case JoltColliderShape::Cylinder:
         return "Cylinder";
+    case JoltColliderShape::Cone:
+        return "Cone";
+    case JoltColliderShape::ConvexHull:
+        return "ConvexHull";
     case JoltColliderShape::Compound:
         return "Compound";
     default:
@@ -198,6 +203,14 @@ JoltColliderShape JoltColliderShapeFromString(const std::string& value)
 
     if (value == "Cylinder") {
         return JoltColliderShape::Cylinder;
+    }
+
+    if (value == "Cone") {
+        return JoltColliderShape::Cone;
+    }
+
+    if (value == "ConvexHull") {
+        return JoltColliderShape::ConvexHull;
     }
 
     if (value == "Compound") {
@@ -1189,6 +1202,8 @@ void WorldSerializer::RegisterDefaultComponentSerializers()
     );
 
     _componentSerializers.RegisterTag<SingleRenderTag>("SingleRenderTag");
+    _componentSerializers.RegisterTag<PrefabPlacementAnchorComponent>(
+        "PrefabPlacementAnchorComponent");
     _componentSerializers.RegisterTag<ActiveCameraTag>("ActiveCameraTag");
     _componentSerializers.RegisterTag<DisabledEntityTag>("DisabledEntityTag");
 
@@ -1409,6 +1424,10 @@ void WorldSerializer::RegisterDefaultComponentSerializers()
     _componentSerializers.Register<JoltColliderComponent>(
         "JoltColliderComponent",
         [](Core&, const JoltColliderComponent& collider) {
+            nlohmann::json convexHullPoints = nlohmann::json::array();
+            for (const glm::vec3& point : collider.convexHullPoints) {
+                convexHullPoints.push_back(Vec3ToJson(point));
+            }
             return nlohmann::json {
                 {"shape", JoltColliderShapeToString(collider.shape)},
                 {"motion", JoltBodyMotionToString(collider.motion)},
@@ -1418,6 +1437,8 @@ void WorldSerializer::RegisterDefaultComponentSerializers()
                 {"halfExtents", Vec3ToJson(collider.halfExtents)},
                 {"capsuleHalfHeight", collider.capsuleHalfHeight},
                 {"cylinderHalfHeight", collider.cylinderHalfHeight},
+                {"coneHalfHeight", collider.coneHalfHeight},
+                {"convexHullPoints", convexHullPoints},
                 {"friction", collider.friction},
                 {"restitution", collider.restitution}
             };
@@ -1436,6 +1457,12 @@ void WorldSerializer::RegisterDefaultComponentSerializers()
                 : glm::vec3{ 0.5f };
             collider.capsuleHalfHeight = data.value("capsuleHalfHeight", 0.5f);
             collider.cylinderHalfHeight = data.value("cylinderHalfHeight", 0.5f);
+            collider.coneHalfHeight = data.value("coneHalfHeight", 0.5f);
+            if (data.contains("convexHullPoints") && data.at("convexHullPoints").is_array()) {
+                for (const auto& point : data.at("convexHullPoints")) {
+                    collider.convexHullPoints.push_back(Vec3FromJson(point));
+                }
+            }
             collider.friction = data.value("friction", 0.2f);
             collider.restitution = data.value("restitution", 0.0f);
             return collider;

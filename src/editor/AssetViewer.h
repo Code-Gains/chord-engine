@@ -38,7 +38,10 @@ private:
     Engine::Core* _core = nullptr;
     RegistryViewer* _registryViewerPtr = nullptr;
     std::vector<AssetFileEntry> _assetFiles;
+    std::vector<std::filesystem::path> _assetFolders;
     std::unordered_map<std::string, std::vector<std::shared_ptr<MeshAsset>>> _loadedMeshes;
+    std::filesystem::path _selectedFolder{ "assets" };
+    std::array<char, 256> _searchBuffer{};
     AssetKind _selectedAssetKind = AssetKind::Mesh;
     std::string _selectedAssetFile;
     std::string _statusText;
@@ -54,6 +57,12 @@ private:
     bool _soundCueDirty = false;
 
     void RefreshAssetList(bool updateStatus = true);
+    void DrawFolderTree(const std::filesystem::path& folder);
+    void DrawAssetList();
+    void DrawAssetDragSource(const AssetFileEntry& file);
+    void SelectAsset(const AssetFileEntry& file);
+    void ActivateAsset(const AssetFileEntry& file);
+    bool AssetMatchesSearch(const AssetFileEntry& file) const;
     std::vector<std::shared_ptr<MeshAsset>>* GetOrLoadMeshes(const std::filesystem::path& projectPath);
     void AssignMeshToSelectedEntity(const std::shared_ptr<MeshAsset>& mesh);
     void AssignSkyboxToSelectedEntity(const std::filesystem::path& projectPath);

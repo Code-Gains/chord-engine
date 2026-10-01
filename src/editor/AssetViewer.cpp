@@ -1,4 +1,6 @@
 #include "AssetViewer.h"
+#include "EditorAssetEvents.h"
+#include "EditorAssetPayloads.h"
 #include "EditorHistory.h"
 
 #include <ImGuiWindowRegistry.h>
@@ -11,6 +13,9 @@
 #include "WorldSerializer.h"
 
 #include <algorithm>
+#include <cctype>
+#include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <string_view>
 #include <system_error>
@@ -18,6 +23,12 @@
 
 void AssetViewer::Update(float deltaTime)
 {
+    if (auto* refreshRequest = _registry.ctx().find<EditorAssetRefreshRequest>();
+        refreshRequest && refreshRequest->requested) {
+        refreshRequest->requested = false;
+        RefreshAssetList(false);
+    }
+
     if (_statusTimer > 0.0f) {
         _statusTimer = std::max(0.0f, _statusTimer - deltaTime);
     }
@@ -45,80 +56,43 @@ void AssetViewer::DrawUi()
             ImGui::TextColored(color, "%s", _statusText.c_str());
         }
 
+        const float availableWidth = ImGui::GetContentRegionAvail().x;
+        const float folderWidth = std::clamp(availableWidth * 0.20f, 170.0f, 240.0f);
+        const float assetWidth = std::clamp(availableWidth * 0.32f, 280.0f, 430.0f);
+
         ImGui::BeginChild(
-            "AssetFileList",
-            ImVec2(420.0f, 0.0f),
+            "AssetFolders",
+            ImVec2(folderWidth, 0.0f),
             true,
-            ImGuiWindowFlags_HorizontalScrollbar
-        );
-
-        for (const auto& file : _assetFiles)
-        {
-            const std::string projectPath = file.projectPath.generic_string();
-            ImGui::PushID(projectPath.c_str());
-
-            if (ImGui::Selectable(file.displayName.c_str(), _selectedAssetFile == projectPath))
-            {
-                _selectedAssetFile = projectPath;
-                _selectedAssetKind = file.kind;
-
-                if (file.kind == AssetKind::Mesh) {
-                    GetOrLoadMeshes(file.projectPath);
-                }
-                else if (file.kind == AssetKind::Prefab) {
-                    SetPrefabPathBuffer(file.projectPath);
-                    _overwritePrefabConfirmationActive = false;
-                }
-                else if (file.kind == AssetKind::SoundCue) {
-                    LoadSelectedSoundCue();
-                }
-                else {
-                    _soundCueLoaded = false;
-                    _soundCueDirty = false;
-                }
-            }
-
-            if (file.kind == AssetKind::Skybox && ImGui::BeginDragDropSource()) {
-                ImGui::SetDragDropPayload(
-                    "ENGINE_SKYBOX_ASSET",
-                    projectPath.c_str(),
-                    projectPath.size() + 1);
-                ImGui::TextUnformatted(projectPath.c_str());
-                ImGui::EndDragDropSource();
-            }
-
-            if (file.kind == AssetKind::AudioClip && ImGui::BeginDragDropSource()) {
-                ImGui::SetDragDropPayload(
-                    "ENGINE_AUDIO_CLIP_ASSET",
-                    projectPath.c_str(),
-                    projectPath.size() + 1);
-                ImGui::TextUnformatted(projectPath.c_str());
-                ImGui::EndDragDropSource();
-            }
-
-            if (file.kind == AssetKind::SoundCue && ImGui::BeginDragDropSource()) {
-                ImGui::SetDragDropPayload(
-                    "ENGINE_SOUND_CUE_ASSET",
-                    projectPath.c_str(),
-                    projectPath.size() + 1);
-                ImGui::TextUnformatted(projectPath.c_str());
-                ImGui::EndDragDropSource();
-            }
-
-            if (ImGui::BeginPopupContextItem("AssetFileContextMenu")) {
-                if (file.kind != AssetKind::Skybox && ImGui::MenuItem("Delete File")) {
-                    RequestDeleteAsset(file.projectPath);
-                }
-                ImGui::EndPopup();
-            }
-
-            ImGui::PopID();
-        }
-
+            ImGuiWindowFlags_AlwaysVerticalScrollbar |
+                ImGuiWindowFlags_HorizontalScrollbar);
+        DrawFolderTree("assets");
         ImGui::EndChild();
         ImGui::SameLine();
 
-        ImGui::BeginChild("AssetMeshList", ImVec2(0.0f, 0.0f), true);
+        ImGui::BeginChild(
+            "AssetFileList",
+            ImVec2(assetWidth, 0.0f),
+            true,
+            ImGuiWindowFlags_AlwaysVerticalScrollbar |
+                ImGuiWindowFlags_HorizontalScrollbar);
+        ImGui::SetNextItemWidth(-1.0f);
+        ImGui::InputTextWithHint(
+            "##AssetSearch",
+            "Search assets...",
+            _searchBuffer.data(),
+            _searchBuffer.size());
+        ImGui::Separator();
+        DrawAssetList();
+        ImGui::EndChild();
+        ImGui::SameLine();
+
+        ImGui::BeginChild(
+            "AssetActions",
+            ImVec2(0.0f, 0.0f),
+            true,
+            ImGuiWindowFlags_AlwaysVerticalScrollbar |
+                ImGuiWindowFlags_HorizontalScrollbar);
 
         if (_selectedAssetFile.empty())
         {
@@ -126,7 +100,7 @@ void AssetViewer::DrawUi()
         }
         else if (_selectedAssetKind == AssetKind::Mesh)
         {
-            ImGui::Text("Mesh: %s", _selectedAssetFile.c_str());
+            ImGui::TextWrapped("Mesh: %s", _selectedAssetFile.c_str());
             if (ImGui::Button("Delete File##DeleteSelectedMeshAsset")) {
                 RequestDeleteAsset(_selectedAssetFile);
             }
@@ -145,7 +119,23 @@ void AssetViewer::DrawUi()
 
                     ImGui::PushID(static_cast<int>(meshIndex));
 
-                    ImGui::Text("%s", meshName.c_str());
+                    ImGui::Selectable(meshName.c_str(), false, 0, ImVec2(180.0f, 0.0f));
+                    if (ImGui::BeginDragDropSource()) {
+                        EditorMeshAssetPayload payload;
+                        std::snprintf(
+                            payload.projectPath,
+                            sizeof(payload.projectPath),
+                            "%s",
+                            mesh->source.path.c_str());
+                        payload.meshIndex = mesh->source.meshIndex;
+                        ImGui::SetDragDropPayload(
+                            "ENGINE_MESH_ASSET",
+                            &payload,
+                            sizeof(payload));
+                        ImGui::TextUnformatted(meshName.c_str());
+                        ImGui::TextDisabled("%s", mesh->source.path.c_str());
+                        ImGui::EndDragDropSource();
+                    }
                     ImGui::SameLine();
 
                     if (ImGui::Button("Assign")) {
@@ -158,7 +148,7 @@ void AssetViewer::DrawUi()
         }
         else if (_selectedAssetKind == AssetKind::World)
         {
-            ImGui::Text("World: %s", _selectedAssetFile.c_str());
+            ImGui::TextWrapped("World: %s", _selectedAssetFile.c_str());
             if (ImGui::Button("Delete File##DeleteSelectedWorldAsset")) {
                 RequestDeleteAsset(_selectedAssetFile);
             }
@@ -170,7 +160,7 @@ void AssetViewer::DrawUi()
         }
         else if (_selectedAssetKind == AssetKind::Prefab)
         {
-            ImGui::Text("Prefab: %s", _selectedAssetFile.c_str());
+            ImGui::TextWrapped("Prefab: %s", _selectedAssetFile.c_str());
             if (ImGui::Button("Delete File##DeleteSelectedPrefabAsset")) {
                 RequestDeleteAsset(_selectedAssetFile);
             }
@@ -213,7 +203,7 @@ void AssetViewer::DrawUi()
         }
         else if (_selectedAssetKind == AssetKind::Skybox)
         {
-            ImGui::Text("Skybox: %s", _selectedAssetFile.c_str());
+            ImGui::TextWrapped("Skybox: %s", _selectedAssetFile.c_str());
             ImGui::Separator();
 
             if (ImGui::Button("Assign to Selected Entity")) {
@@ -230,7 +220,7 @@ void AssetViewer::DrawUi()
         }
         else if (_selectedAssetKind == AssetKind::AudioClip)
         {
-            ImGui::Text("Audio Clip: %s", _selectedAssetFile.c_str());
+            ImGui::TextWrapped("Audio Clip: %s", _selectedAssetFile.c_str());
             if (ImGui::Button("Preview")) {
                 if (_core->PlayProjectAudioOneShot(_selectedAssetFile)) {
                     SetStatus("Playing " + _selectedAssetFile, true);
@@ -272,6 +262,178 @@ void AssetViewer::DrawUi()
     windowRegistry.SetWindowOpen("Asset Viewer", open);
 }
 
+void AssetViewer::DrawFolderTree(const std::filesystem::path& folder)
+{
+    std::vector<std::filesystem::path> children;
+    for (const auto& candidate : _assetFolders) {
+        if (candidate != folder && candidate.parent_path() == folder) {
+            children.push_back(candidate);
+        }
+    }
+
+    const std::string folderPath = folder.generic_string();
+    const std::string label = folder == std::filesystem::path("assets")
+        ? std::string("assets")
+        : folder.filename().string();
+    ImGuiTreeNodeFlags flags =
+        ImGuiTreeNodeFlags_OpenOnArrow |
+        ImGuiTreeNodeFlags_SpanAvailWidth;
+    if (children.empty()) {
+        flags |= ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen;
+    }
+    if (_selectedFolder == folder) {
+        flags |= ImGuiTreeNodeFlags_Selected;
+    }
+    if (folder == std::filesystem::path("assets")) {
+        ImGui::SetNextItemOpen(true, ImGuiCond_Once);
+    }
+
+    ImGui::PushID(folderPath.c_str());
+    const bool open = ImGui::TreeNodeEx(label.c_str(), flags);
+    if (ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen()) {
+        _selectedFolder = folder;
+    }
+
+    if (open && !children.empty()) {
+        for (const auto& child : children) {
+            DrawFolderTree(child);
+        }
+        ImGui::TreePop();
+    }
+    ImGui::PopID();
+}
+
+void AssetViewer::DrawAssetList()
+{
+    const bool searching = _searchBuffer.front() != '\0';
+    size_t visibleAssetCount = 0;
+
+    for (const auto& file : _assetFiles) {
+        if (searching) {
+            if (!AssetMatchesSearch(file)) {
+                continue;
+            }
+        }
+        else if (file.projectPath.parent_path() != _selectedFolder) {
+            continue;
+        }
+
+        ++visibleAssetCount;
+        const std::string projectPath = file.projectPath.generic_string();
+        const std::string label = searching
+            ? file.displayName + "  " + projectPath
+            : file.displayName;
+
+        ImGui::PushID(projectPath.c_str());
+        if (ImGui::Selectable(label.c_str(), _selectedAssetFile == projectPath)) {
+            SelectAsset(file);
+        }
+
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal)) {
+            ImGui::SetTooltip("%s", projectPath.c_str());
+        }
+
+        if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+            ActivateAsset(file);
+        }
+
+        DrawAssetDragSource(file);
+
+        if (ImGui::BeginPopupContextItem("AssetFileContextMenu")) {
+            if (file.kind != AssetKind::Skybox && ImGui::MenuItem("Delete File")) {
+                RequestDeleteAsset(file.projectPath);
+            }
+            ImGui::EndPopup();
+        }
+
+        ImGui::PopID();
+    }
+
+    if (visibleAssetCount == 0) {
+        ImGui::TextDisabled(searching ? "No matching assets." : "This folder has no assets.");
+    }
+}
+
+void AssetViewer::DrawAssetDragSource(const AssetFileEntry& file)
+{
+    const std::string projectPath = file.projectPath.generic_string();
+    const char* payloadType = nullptr;
+
+    if (file.kind == AssetKind::Skybox) {
+        payloadType = "ENGINE_SKYBOX_ASSET";
+    }
+    else if (file.kind == AssetKind::AudioClip) {
+        payloadType = "ENGINE_AUDIO_CLIP_ASSET";
+    }
+    else if (file.kind == AssetKind::SoundCue) {
+        payloadType = "ENGINE_SOUND_CUE_ASSET";
+    }
+
+    if (payloadType && ImGui::BeginDragDropSource()) {
+        ImGui::SetDragDropPayload(
+            payloadType,
+            projectPath.c_str(),
+            projectPath.size() + 1);
+        ImGui::TextUnformatted(projectPath.c_str());
+        ImGui::EndDragDropSource();
+    }
+}
+
+void AssetViewer::SelectAsset(const AssetFileEntry& file)
+{
+    _selectedAssetFile = file.projectPath.generic_string();
+    _selectedAssetKind = file.kind;
+
+    if (file.kind == AssetKind::Mesh) {
+        GetOrLoadMeshes(file.projectPath);
+    }
+    else if (file.kind == AssetKind::Prefab) {
+        SetPrefabPathBuffer(file.projectPath);
+        _overwritePrefabConfirmationActive = false;
+    }
+    else if (file.kind == AssetKind::SoundCue) {
+        LoadSelectedSoundCue();
+    }
+    else {
+        _soundCueLoaded = false;
+        _soundCueDirty = false;
+    }
+}
+
+void AssetViewer::ActivateAsset(const AssetFileEntry& file)
+{
+    SelectAsset(file);
+    if (file.kind == AssetKind::World) {
+        LoadSelectedWorld();
+    }
+    else if (file.kind == AssetKind::Prefab) {
+        InstantiateSelectedPrefab();
+    }
+}
+
+bool AssetViewer::AssetMatchesSearch(const AssetFileEntry& file) const
+{
+    const std::string query = _searchBuffer.data();
+    if (query.empty()) {
+        return true;
+    }
+
+    const auto matchesSubsequence = [&query](std::string_view candidate) {
+        size_t queryIndex = 0;
+        for (const unsigned char character : candidate) {
+            if (queryIndex < query.size() &&
+                std::tolower(character) ==
+                    std::tolower(static_cast<unsigned char>(query[queryIndex]))) {
+                ++queryIndex;
+            }
+        }
+        return queryIndex == query.size();
+    };
+
+    return matchesSubsequence(file.projectPath.filename().string()) ||
+        matchesSubsequence(file.projectPath.generic_string());
+}
+
 AssetViewer::AssetViewer(entt::registry& registry, Engine::Core* core, RegistryViewer* registryViewerPtr)
     : System(registry),
       _core(core),
@@ -292,6 +454,7 @@ AssetViewer::AssetViewer(entt::registry& registry, Engine::Core* core, RegistryV
 void AssetViewer::RefreshAssetList(bool updateStatus)
 {
     _assetFiles.clear();
+    _assetFolders.clear();
 
     if (!_core) {
         if (updateStatus) {
@@ -309,16 +472,25 @@ void AssetViewer::RefreshAssetList(bool updateStatus)
         return;
     }
 
-    for (const auto& entry : std::filesystem::recursive_directory_iterator(assetsPath))
-    {
+    _assetFolders.emplace_back("assets");
+
+    for (auto iterator = std::filesystem::recursive_directory_iterator(assetsPath);
+         iterator != std::filesystem::recursive_directory_iterator();
+         ++iterator) {
+        const auto& entry = *iterator;
         if (entry.is_directory() && IsSkyboxFolder(entry.path())) {
             const auto projectPath = _core->MakeProjectRelative(entry.path());
-            const auto projectPathString = projectPath.generic_string();
             _assetFiles.push_back(AssetFileEntry {
                 AssetKind::Skybox,
                 projectPath,
-                "[Skybox] " + projectPathString
+                "[Skybox] " + projectPath.filename().string()
             });
+            iterator.disable_recursion_pending();
+            continue;
+        }
+
+        if (entry.is_directory()) {
+            _assetFolders.push_back(_core->MakeProjectRelative(entry.path()));
             continue;
         }
 
@@ -359,9 +531,11 @@ void AssetViewer::RefreshAssetList(bool updateStatus)
         _assetFiles.push_back(AssetFileEntry {
             kind,
             projectPath,
-            displayPrefix + projectPathString
+            displayPrefix + projectPath.filename().string()
         });
     }
+
+    std::sort(_assetFolders.begin(), _assetFolders.end());
 
     std::sort(
         _assetFiles.begin(),
@@ -370,6 +544,11 @@ void AssetViewer::RefreshAssetList(bool updateStatus)
             return left.displayName < right.displayName;
         }
     );
+
+    if (std::find(_assetFolders.begin(), _assetFolders.end(), _selectedFolder) ==
+        _assetFolders.end()) {
+        _selectedFolder = "assets";
+    }
 
     if (updateStatus) {
         SetStatus("Found " + std::to_string(_assetFiles.size()) + " assets.", true);
