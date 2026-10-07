@@ -11,7 +11,6 @@
 #include "Log.h"
 #include "MeshComponent.h"
 #include "NameComponent.h"
-#include "PrefabComponents.h"
 #include "ScreenPostProcessComponent.h"
 #include "SunlightComponent.h"
 #include "Transform.h"
@@ -100,30 +99,6 @@ const char* CameraBackgroundModeToString(CameraBackgroundMode mode)
     default:
         return "Skybox";
     }
-}
-
-const char* PrefabPlacementRotationModeToString(PrefabPlacementRotationMode mode)
-{
-    switch (mode) {
-    case PrefabPlacementRotationMode::Preserve:
-        return "Preserve";
-    case PrefabPlacementRotationMode::AlignToPlacementUp:
-        return "AlignToPlacementUp";
-    case PrefabPlacementRotationMode::Automatic:
-    default:
-        return "Automatic";
-    }
-}
-
-PrefabPlacementRotationMode PrefabPlacementRotationModeFromString(std::string_view value)
-{
-    if (value == "Preserve") {
-        return PrefabPlacementRotationMode::Preserve;
-    }
-    if (value == "AlignToPlacementUp") {
-        return PrefabPlacementRotationMode::AlignToPlacementUp;
-    }
-    return PrefabPlacementRotationMode::Automatic;
 }
 
 CameraBackgroundMode CameraBackgroundModeFromString(const std::string& value)
@@ -1226,21 +1201,6 @@ void WorldSerializer::RegisterDefaultComponentSerializers()
     );
 
     _componentSerializers.RegisterTag<SingleRenderTag>("SingleRenderTag");
-    _componentSerializers.Register<PrefabPlacementAnchorComponent>(
-        "PrefabPlacementAnchorComponent",
-        [](Core&, const PrefabPlacementAnchorComponent& anchor) {
-            return nlohmann::json {
-                {"rotationMode", PrefabPlacementRotationModeToString(anchor.rotationMode)},
-                {"footprintRadius", anchor.footprintRadius}
-            };
-        },
-        [](Core&, const nlohmann::json& data) {
-            PrefabPlacementAnchorComponent anchor;
-            anchor.rotationMode = PrefabPlacementRotationModeFromString(
-                data.value("rotationMode", std::string("Automatic")));
-            anchor.footprintRadius = std::max(0.0f, data.value("footprintRadius", 0.0f));
-            return anchor;
-        });
     _componentSerializers.RegisterTag<ActiveCameraTag>("ActiveCameraTag");
     _componentSerializers.RegisterTag<DisabledEntityTag>("DisabledEntityTag");
 

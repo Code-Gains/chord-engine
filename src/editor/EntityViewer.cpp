@@ -3,7 +3,6 @@
 #include "Camera.h"
 #include "Core.h"
 #include "NameComponent.h"
-#include "PrefabComponents.h"
 #include "SunlightComponent.h"
 #include "Transform.h"
 #include "MeshComponent.h"
@@ -726,7 +725,6 @@ EntityViewer::EntityViewer(entt::registry &registry, RegistryViewer* registryVie
     _componentUis.push_back(std::make_unique<MeshCorruptionComponentUi>());
     _componentUis.push_back(std::make_unique<EffectMeshComponentUi>());
     _componentUis.push_back(std::make_unique<SingleRenderTagUi>());
-    _componentUis.push_back(std::make_unique<PrefabPlacementAnchorComponentUi>());
     _componentUis.push_back(std::make_unique<ActiveCameraTagUi>());
     _componentUis.push_back(std::make_unique<VelocityComponentUi>());
     _componentUis.push_back(std::make_unique<GravityBodyComponentUi>());
@@ -832,17 +830,6 @@ EntityViewer::EntityViewer(entt::registry &registry, RegistryViewer* registryVie
         },
         [](entt::registry& registry, entt::entity entity) {
             registry.emplace<SingleRenderTag>(entity);
-        }
-    );
-
-    AddComponentMenuItem(
-        "Prefab Placement Anchor",
-        [](entt::registry& registry, entt::entity entity) {
-            return registry.all_of<Transform>(entity) &&
-                !registry.all_of<PrefabPlacementAnchorComponent>(entity);
-        },
-        [](entt::registry& registry, entt::entity entity) {
-            registry.emplace<PrefabPlacementAnchorComponent>(entity);
         }
     );
 

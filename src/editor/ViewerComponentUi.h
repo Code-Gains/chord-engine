@@ -17,7 +17,6 @@
 #include "Core.h"
 #include "EnvironmentComponent.h"
 #include "NameComponent.h"
-#include "PrefabComponents.h"
 #include "ScreenPostProcessComponent.h"
 #include "SunlightComponent.h"
 #include "Camera.h"
@@ -560,55 +559,6 @@ public:
         if (DrawRemovableComponentHeader<SingleRenderTag>(registry, entity, "Single Render", "SingleRenderTag"))
         {
             ImGui::TextUnformatted("Enabled");
-        }
-    }
-};
-
-class PrefabPlacementAnchorComponentUi : public ViewerComponentUi {
-public:
-    void Draw(entt::registry& registry, entt::entity entity) override {
-        if (!registry.all_of<PrefabPlacementAnchorComponent>(entity))
-            return;
-
-        if (DrawRemovableComponentHeader<PrefabPlacementAnchorComponent>(
-                registry,
-                entity,
-                "Prefab Placement Anchor",
-                "PrefabPlacementAnchorComponent"))
-        {
-            ImGui::TextWrapped(
-                "This entity's transform origin is used as the prefab placement point.");
-
-            auto& anchor = registry.get<PrefabPlacementAnchorComponent>(entity);
-            int rotationMode = static_cast<int>(anchor.rotationMode);
-            constexpr const char* rotationModes[] {
-                "Automatic",
-                "Preserve",
-                "Align to Placement Up"
-            };
-            if (ImGui::Combo(
-                    "Rotation Mode##PrefabPlacementAnchorRotationMode",
-                    &rotationMode,
-                    rotationModes,
-                    static_cast<int>(std::size(rotationModes)))) {
-                anchor.rotationMode = static_cast<PrefabPlacementRotationMode>(rotationMode);
-            }
-
-            ImGui::SetNextItemWidth(-1.0f);
-            if (ImGui::DragFloat(
-                    "Footprint Radius##PrefabPlacementAnchorFootprintRadius",
-                    &anchor.footprintRadius,
-                    0.1f,
-                    0.0f,
-                    100000.0f,
-                    "%.2f")) {
-                anchor.footprintRadius = std::max(0.0f, anchor.footprintRadius);
-            }
-
-            ImGui::TextDisabled(
-                "Planet placement interprets placement up as radial from the center.");
-            ImGui::TextDisabled(
-                "Footprint radius reserves surface space around generated instances.");
         }
     }
 };
