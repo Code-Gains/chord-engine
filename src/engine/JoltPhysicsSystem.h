@@ -43,11 +43,13 @@ public:
 
 private:
     void InitializeJolt();
+    void BuildCompoundAuthoringCache();
     void SyncBodies();
+    void SyncRuntimeBodies();
     void RemoveStaleBodies();
     void RemoveBody(entt::entity entity);
-    void CreateOrUpdateBody(entt::entity entity);
-    bool BodyMatchesAuthoring(entt::entity entity) const;
+    void CreateOrUpdateBody(entt::entity entity, uint64_t compoundSignature);
+    bool BodyMatchesAuthoring(entt::entity entity, uint64_t compoundSignature) const;
 
     Core* _core = nullptr;
     std::unique_ptr<JPH::PhysicsSystem> _physicsSystem;
@@ -55,6 +57,10 @@ private:
     std::unique_ptr<JPH::JobSystemThreadPool> _jobSystem;
     std::unordered_map<entt::entity, uint32_t> _bodies;
     std::unordered_map<uint32_t, entt::entity> _bodyEntities;
+    std::unordered_map<entt::entity, entt::entity> _compoundOwners;
+    std::unordered_map<entt::entity, uint64_t> _compoundSignatures;
+    std::size_t _cachedColliderEntityCount = 0;
+    bool _compoundAuthoringCacheValid = false;
 };
 
 } // namespace Engine

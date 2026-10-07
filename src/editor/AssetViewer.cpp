@@ -368,6 +368,9 @@ void AssetViewer::DrawAssetDragSource(const AssetFileEntry& file)
     else if (file.kind == AssetKind::SoundCue) {
         payloadType = "ENGINE_SOUND_CUE_ASSET";
     }
+    else if (file.kind == AssetKind::Prefab) {
+        payloadType = "ENGINE_PREFAB_ASSET";
+    }
 
     if (payloadType && ImGui::BeginDragDropSource()) {
         ImGui::SetDragDropPayload(

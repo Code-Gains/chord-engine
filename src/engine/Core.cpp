@@ -1,5 +1,4 @@
 #include <chrono>
-using Clock = std::chrono::high_resolution_clock;
 #include <cmath>
 #include "Core.h"
 //#include "VkInit.h"
@@ -627,6 +626,11 @@ void Core::Run() {
     bool running = true;
     std::vector<double> benchmarkFrameTimesMs;
     std::unordered_map<std::string, BenchmarkTiming> benchmarkSystemTimings;
+    GpuFrameTimings benchmarkGpuTotals;
+    CpuDrawTimings benchmarkCpuDrawTotals;
+    CpuRecordTimings benchmarkCpuRecordTotals;
+    uint64_t lastCollectedGpuTimingSerial = 0;
+    uint64_t benchmarkGpuSampleCount = 0;
     int benchmarkMeasuredFixedSteps = 0;
     int benchmarkFrameIndex = 0;
     if (_benchmarkOptions.enabled) {
@@ -674,7 +678,18 @@ void Core::Run() {
                     system->FixedUpdate(fixedDelta);
                 }
             }
-            ResolveHierarchyTransforms(_registry);
+            if (collectBenchmarkTimings) {
+                const auto hierarchyStartTime = std::chrono::high_resolution_clock::now();
+                ResolveHierarchyTransforms(_registry);
+                const auto hierarchyEndTime = std::chrono::high_resolution_clock::now();
+                auto& timing = benchmarkSystemTimings["Fixed hierarchy resolution"];
+                timing.totalMs += std::chrono::duration<double, std::milli>(
+                    hierarchyEndTime - hierarchyStartTime).count();
+                ++timing.calls;
+            }
+            else {
+                ResolveHierarchyTransforms(_registry);
+            }
             fixedUpdateAccumulator -= fixedDelta;
             ++fixedSteps;
             if (collectBenchmarkTimings) {
@@ -721,9 +736,21 @@ void Core::Run() {
             }
         }
         _audioSystem.Update();
-        ResolveHierarchyTransforms(_registry);
+        if (collectBenchmarkTimings) {
+            const auto hierarchyStartTime = std::chrono::high_resolution_clock::now();
+            ResolveHierarchyTransforms(_registry);
+            const auto hierarchyEndTime = std::chrono::high_resolution_clock::now();
+            auto& timing = benchmarkSystemTimings["Frame hierarchy resolution"];
+            timing.totalMs += std::chrono::duration<double, std::milli>(
+                hierarchyEndTime - hierarchyStartTime).count();
+            ++timing.calls;
+        }
+        else {
+            ResolveHierarchyTransforms(_registry);
+        }
 
         // imgui new frame
+        const auto uiStartTime = std::chrono::high_resolution_clock::now();
         ImGui_ImplVulkan_NewFrame();
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
@@ -916,8 +943,49 @@ void Core::Run() {
         ImGui::UpdatePlatformWindows();
         ImGui::RenderPlatformWindowsDefault();
         UpdateEnvironmentSkybox();
+        if (collectBenchmarkTimings) {
+            const auto uiEndTime = std::chrono::high_resolution_clock::now();
+            auto& timing = benchmarkSystemTimings["UI and platform preparation"];
+            timing.totalMs += std::chrono::duration<double, std::milli>(
+                uiEndTime - uiStartTime).count();
+            ++timing.calls;
+        }
         
-        Draw();
+        if (collectBenchmarkTimings) {
+            const auto drawStartTime = std::chrono::high_resolution_clock::now();
+            Draw();
+            const auto drawEndTime = std::chrono::high_resolution_clock::now();
+            auto& timing = benchmarkSystemTimings["Draw CPU including GPU wait/present"];
+            timing.totalMs += std::chrono::duration<double, std::milli>(
+                drawEndTime - drawStartTime).count();
+            ++timing.calls;
+            benchmarkCpuDrawTotals.fenceWaitMs += _latestCpuDrawTimings.fenceWaitMs;
+            benchmarkCpuDrawTotals.setupAndAcquireMs += _latestCpuDrawTimings.setupAndAcquireMs;
+            benchmarkCpuDrawTotals.commandRecordingMs += _latestCpuDrawTimings.commandRecordingMs;
+            benchmarkCpuDrawTotals.queueSubmitMs += _latestCpuDrawTimings.queueSubmitMs;
+            benchmarkCpuDrawTotals.presentMs += _latestCpuDrawTimings.presentMs;
+            benchmarkCpuDrawTotals.totalMs += _latestCpuDrawTimings.totalMs;
+            benchmarkCpuRecordTotals.shadowMs += _latestCpuRecordTimings.shadowMs;
+            benchmarkCpuRecordTotals.sceneSetupMs += _latestCpuRecordTimings.sceneSetupMs;
+            benchmarkCpuRecordTotals.geometryMs += _latestCpuRecordTimings.geometryMs;
+            benchmarkCpuRecordTotals.postProcessMs += _latestCpuRecordTimings.postProcessMs;
+            benchmarkCpuRecordTotals.finalCopyAndUiMs +=
+                _latestCpuRecordTimings.finalCopyAndUiMs;
+
+            if (_latestGpuTimings.valid &&
+                _latestGpuTimings.serial != lastCollectedGpuTimingSerial) {
+                benchmarkGpuTotals.shadowMs += _latestGpuTimings.shadowMs;
+                benchmarkGpuTotals.geometryMs += _latestGpuTimings.geometryMs;
+                benchmarkGpuTotals.postProcessMs += _latestGpuTimings.postProcessMs;
+                benchmarkGpuTotals.finalCopyAndUiMs += _latestGpuTimings.finalCopyAndUiMs;
+                benchmarkGpuTotals.totalMs += _latestGpuTimings.totalMs;
+                lastCollectedGpuTimingSerial = _latestGpuTimings.serial;
+                ++benchmarkGpuSampleCount;
+            }
+        }
+        else {
+            Draw();
+        }
 
         if (_benchmarkOptions.enabled) {
             const auto benchmarkFrameEndTime = std::chrono::high_resolution_clock::now();
@@ -970,6 +1038,49 @@ void Core::Run() {
                 std::ostringstream timingResult;
                 timingResult << "Benchmark fixed steps during measured frames=" << benchmarkMeasuredFixedSteps;
                 ENGINE_LOG_INFO(timingResult.str());
+
+                if (benchmarkGpuSampleCount > 0) {
+                    const double sampleCount = static_cast<double>(benchmarkGpuSampleCount);
+                    std::ostringstream gpuResult;
+                    gpuResult << "Benchmark GPU: samples=" << benchmarkGpuSampleCount
+                              << ", total_ms=" << benchmarkGpuTotals.totalMs / sampleCount
+                              << ", shadow_ms=" << benchmarkGpuTotals.shadowMs / sampleCount
+                              << ", geometry_ms=" << benchmarkGpuTotals.geometryMs / sampleCount
+                              << ", post_ms=" << benchmarkGpuTotals.postProcessMs / sampleCount
+                              << ", final_copy_ui_ms="
+                              << benchmarkGpuTotals.finalCopyAndUiMs / sampleCount;
+                    ENGINE_LOG_INFO(gpuResult.str());
+                }
+
+                const double measuredFrames =
+                    static_cast<double>(benchmarkFrameTimesMs.size());
+                std::ostringstream drawCpuResult;
+                drawCpuResult << "Benchmark Draw CPU: total_ms="
+                              << benchmarkCpuDrawTotals.totalMs / measuredFrames
+                              << ", fence_wait_ms="
+                              << benchmarkCpuDrawTotals.fenceWaitMs / measuredFrames
+                              << ", setup_acquire_ms="
+                              << benchmarkCpuDrawTotals.setupAndAcquireMs / measuredFrames
+                              << ", record_ms="
+                              << benchmarkCpuDrawTotals.commandRecordingMs / measuredFrames
+                              << ", submit_ms="
+                              << benchmarkCpuDrawTotals.queueSubmitMs / measuredFrames
+                              << ", present_ms="
+                              << benchmarkCpuDrawTotals.presentMs / measuredFrames;
+                ENGINE_LOG_INFO(drawCpuResult.str());
+
+                std::ostringstream recordCpuResult;
+                recordCpuResult << "Benchmark Record CPU: shadow_ms="
+                                << benchmarkCpuRecordTotals.shadowMs / measuredFrames
+                                << ", scene_setup_ms="
+                                << benchmarkCpuRecordTotals.sceneSetupMs / measuredFrames
+                                << ", geometry_ms="
+                                << benchmarkCpuRecordTotals.geometryMs / measuredFrames
+                                << ", post_ms="
+                                << benchmarkCpuRecordTotals.postProcessMs / measuredFrames
+                                << ", final_copy_ui_ms="
+                                << benchmarkCpuRecordTotals.finalCopyAndUiMs / measuredFrames;
+                ENGINE_LOG_INFO(recordCpuResult.str());
 
                 const std::size_t timingCount = std::min<std::size_t>(8, sortedTimings.size());
                 for (std::size_t index = 0; index < timingCount; ++index) {
@@ -1132,6 +1243,7 @@ entt::entity Core::ResolveRenderCameraEntity()
 
 void Core::Draw()
 {
+    const auto drawStartTime = std::chrono::high_resolution_clock::now();
     auto cameraEntity = ResolveRenderCameraEntity();
     Camera* camera = nullptr;
     if (cameraEntity != entt::null && _registry.valid(cameraEntity)) {
@@ -1141,6 +1253,45 @@ void Core::Draw()
     FrameData& frameData = GetCurrentFrame();
     //wait until the gpu has finished rendering the last frame. Timeout of 1 second
     VK_CHECK(vkWaitForFences(_device, 1, &GetCurrentFrame()._renderFence, true, 1000000000));
+    const auto fenceCompleteTime = std::chrono::high_resolution_clock::now();
+
+    if (frameData._gpuQueriesReady) {
+        std::array<uint64_t, GPU_TIMESTAMP_QUERY_COUNT> timestamps{};
+        const VkResult queryResult = vkGetQueryPoolResults(
+            _device,
+            frameData._gpuQueryPool,
+            0,
+            GPU_TIMESTAMP_QUERY_COUNT,
+            sizeof(timestamps),
+            timestamps.data(),
+            sizeof(uint64_t),
+            VK_QUERY_RESULT_64_BIT);
+        if (queryResult == VK_SUCCESS) {
+            const auto millisecondsBetween =
+                [this, &timestamps](uint32_t begin, uint32_t end) {
+                    return static_cast<double>(timestamps[end] - timestamps[begin]) *
+                        static_cast<double>(_timestampPeriod) / 1'000'000.0;
+                };
+            _latestGpuTimings.shadowMs = millisecondsBetween(
+                GpuTimestampFrameBegin,
+                GpuTimestampShadowEnd);
+            _latestGpuTimings.geometryMs = millisecondsBetween(
+                GpuTimestampShadowEnd,
+                GpuTimestampGeometryEnd);
+            _latestGpuTimings.postProcessMs = millisecondsBetween(
+                GpuTimestampGeometryEnd,
+                GpuTimestampPostProcessEnd);
+            _latestGpuTimings.finalCopyAndUiMs = millisecondsBetween(
+                GpuTimestampPostProcessEnd,
+                GpuTimestampFrameEnd);
+            _latestGpuTimings.totalMs = millisecondsBetween(
+                GpuTimestampFrameBegin,
+                GpuTimestampFrameEnd);
+            _latestGpuTimings.valid = true;
+            ++_latestGpuTimings.serial;
+        }
+        frameData._gpuQueriesReady = false;
+    }
 
     // After vkWaitForFences, before anything else:
     if (_pendingScreenshot.buffer != VK_NULL_HANDLE) // todo move out
@@ -1271,6 +1422,14 @@ void Core::Draw()
         vkinit::command_buffer_begin_info(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT);
     // start the command buffer recording
     VK_CHECK(vkBeginCommandBuffer(cmd, &cmdBeginInfo));
+    const auto commandRecordingStartTime = std::chrono::high_resolution_clock::now();
+    vkCmdResetQueryPool(cmd, frameData._gpuQueryPool, 0, GPU_TIMESTAMP_QUERY_COUNT);
+    vkCmdWriteTimestamp2(
+        cmd,
+        VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT,
+        frameData._gpuQueryPool,
+        GpuTimestampFrameBegin);
+    BuildRenderQueues();
 
     _drawExtent.width = _drawImage.imageExtent.width;
     _drawExtent.height = _drawImage.imageExtent.height;
@@ -1278,6 +1437,12 @@ void Core::Draw()
     // transition our main draw image into general layout so we can write into it
     // we will overwrite it all so we dont care about what was the older layout
     DrawShadowMap(cmd);
+    vkCmdWriteTimestamp2(
+        cmd,
+        VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT,
+        frameData._gpuQueryPool,
+        GpuTimestampShadowEnd);
+    const auto shadowRecordingEndTime = std::chrono::high_resolution_clock::now();
 
     vkutil::transition_image(cmd, _drawImage.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL);
     DrawBackground(cmd);
@@ -1291,10 +1456,23 @@ void Core::Draw()
     else {
         vkutil::transition_image(cmd, _depthImage.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL);
     }
+    const auto sceneSetupEndTime = std::chrono::high_resolution_clock::now();
     DrawGeometry(cmd);
+    const auto geometryRecordingEndTime = std::chrono::high_resolution_clock::now();
+    vkCmdWriteTimestamp2(
+        cmd,
+        VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT,
+        frameData._gpuQueryPool,
+        GpuTimestampGeometryEnd);
     DrawSelectedOutline(cmd);
     DrawHeightFog(cmd);
     DrawScreenPostProcess(cmd);
+    vkCmdWriteTimestamp2(
+        cmd,
+        VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT,
+        frameData._gpuQueryPool,
+        GpuTimestampPostProcessEnd);
+    const auto postProcessRecordingEndTime = std::chrono::high_resolution_clock::now();
     { // TODO move to some other file
         const bool screenshotRequested = camera && camera->screenshotRequested;
         const bool depthCaptureRequested = _depthCaptureRequested;
@@ -1430,8 +1608,25 @@ void Core::Draw()
     // set swapchain image layout to Present so we can draw it
     vkutil::transition_image(cmd, _swapchainImages[swapchainImageIndex], VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
 
+    vkCmdWriteTimestamp2(
+        cmd,
+        VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT,
+        frameData._gpuQueryPool,
+        GpuTimestampFrameEnd);
+
     //finalize the command buffer (we can no longer add commands, but it can now be executed)
     VK_CHECK(vkEndCommandBuffer(cmd));
+    const auto commandRecordingEndTime = std::chrono::high_resolution_clock::now();
+    _latestCpuRecordTimings.shadowMs = std::chrono::duration<double, std::milli>(
+        shadowRecordingEndTime - commandRecordingStartTime).count();
+    _latestCpuRecordTimings.sceneSetupMs = std::chrono::duration<double, std::milli>(
+        sceneSetupEndTime - shadowRecordingEndTime).count();
+    _latestCpuRecordTimings.geometryMs = std::chrono::duration<double, std::milli>(
+        geometryRecordingEndTime - sceneSetupEndTime).count();
+    _latestCpuRecordTimings.postProcessMs = std::chrono::duration<double, std::milli>(
+        postProcessRecordingEndTime - geometryRecordingEndTime).count();
+    _latestCpuRecordTimings.finalCopyAndUiMs = std::chrono::duration<double, std::milli>(
+        commandRecordingEndTime - postProcessRecordingEndTime).count();
     // ---------------------------------------------------------------------------------
 
     // prepare the submission to the queue. 
@@ -1453,6 +1648,8 @@ void Core::Draw()
     // submit command buffer to the queue and execute it.
     // _renderFence will now block until the graphic commands finish execution
     VK_CHECK(vkQueueSubmit2(_graphicsQueue, 1, &submit, GetCurrentFrame()._renderFence));
+    frameData._gpuQueriesReady = true;
+    const auto queueSubmitEndTime = std::chrono::high_resolution_clock::now();
 
     // prepare present
     // this will put the image we just rendered to into the visible window.
@@ -1478,6 +1675,23 @@ void Core::Draw()
     else if (presentResult != VK_SUCCESS) {
         throw std::runtime_error("Failed to present swapchain image!");
     }
+    const auto presentEndTime = std::chrono::high_resolution_clock::now();
+
+    const auto milliseconds = [](auto begin, auto end) {
+        return std::chrono::duration<double, std::milli>(end - begin).count();
+    };
+    _latestCpuDrawTimings.fenceWaitMs = milliseconds(drawStartTime, fenceCompleteTime);
+    _latestCpuDrawTimings.setupAndAcquireMs = milliseconds(
+        fenceCompleteTime,
+        commandRecordingStartTime);
+    _latestCpuDrawTimings.commandRecordingMs = milliseconds(
+        commandRecordingStartTime,
+        commandRecordingEndTime);
+    _latestCpuDrawTimings.queueSubmitMs = milliseconds(
+        commandRecordingEndTime,
+        queueSubmitEndTime);
+    _latestCpuDrawTimings.presentMs = milliseconds(queueSubmitEndTime, presentEndTime);
+    _latestCpuDrawTimings.totalMs = milliseconds(drawStartTime, presentEndTime);
     // increase the number of frames drawn
     _frameNumber++;
 }
@@ -1520,6 +1734,93 @@ void Core::DrawBackground(VkCommandBuffer cmd)
     
     // clear image
     vkCmdClearColorImage(cmd, _drawImage.image, VK_IMAGE_LAYOUT_GENERAL, &clearValue, 1, &clearRange);
+}
+
+void Core::BuildRenderQueues()
+{
+    for (auto& [key, instances] : _batches) {
+        instances.clear();
+    }
+    for (auto& [mesh, instances] : _shadowBatches) {
+        instances.clear();
+    }
+    _opaqueRenderBounds.clear();
+
+    auto view = _registry.view<MeshComponent, Transform>(
+        entt::exclude<EffectMeshComponent, DisabledEntityTag>);
+    _opaqueRenderBounds.reserve(view.size_hint());
+
+    for (const entt::entity entity : view) {
+        if (IsEntityDisabled(_registry, entity)) {
+            continue;
+        }
+
+        auto& meshComponent = view.get<MeshComponent>(entity);
+        auto& transform = view.get<Transform>(entity);
+        MeshAsset* mesh = meshComponent.mesh.get();
+        if (!mesh || mesh->surfaces.empty()) {
+            continue;
+        }
+
+        auto& surface = mesh->surfaces[0];
+        MaterialInstance* material = ResolveMeshMaterial(meshComponent, surface);
+        if (material && material->passType == MaterialPass::Transparent) {
+            continue;
+        }
+
+        InstanceData instance{};
+        instance.position = transform.position;
+        instance.rotation = transform.rotation;
+        instance.scale = transform.scale;
+        instance.baseColorFactor = meshComponent.baseColorFactor;
+        instance.flashColorAndAmount = ResolveMeshFlash(_registry, entity);
+        instance.corruptionColorAndAmount = ResolveMeshCorruptionColor(_registry, entity);
+        instance.corruptionParams = ResolveMeshCorruptionParams(_registry, entity);
+
+        auto& shadowInstances = _shadowBatches[mesh];
+        if (shadowInstances.capacity() == 0) {
+            shadowInstances.reserve(128);
+        }
+        shadowInstances.push_back(instance);
+
+        const glm::vec3 absoluteScale = glm::abs(transform.scale);
+        const float maximumScale = std::max({
+            absoluteScale.x,
+            absoluteScale.y,
+            absoluteScale.z
+        });
+        const glm::vec3 worldCenter =
+            transform.position +
+            transform.rotation * (mesh->boundsCenter * transform.scale);
+        _opaqueRenderBounds.emplace_back(
+            worldCenter,
+            mesh->boundsRadius * maximumScale);
+
+        if (_registry.all_of<SingleRenderTag>(entity)) {
+            continue;
+        }
+
+        RenderPipelineId pipelineId = ResolveEditorWireframePipeline(_instancedMeshPipelineId);
+        if (material && material->pipelines.instanced.IsValid()) {
+            pipelineId =
+                _editorWireframeEnabled && material->pipelines.wireframeInstanced.IsValid()
+                    ? material->pipelines.wireframeInstanced
+                    : material->pipelines.instanced;
+        }
+
+        auto& mainInstances = _batches[MeshBatchKey {
+            .mesh = mesh,
+            .material = material,
+            .pipelineId = pipelineId
+        }];
+        if (mainInstances.capacity() == 0) {
+            mainInstances.reserve(128);
+        }
+        mainInstances.push_back(instance);
+    }
+
+    std::erase_if(_batches, [](const auto& batch) { return batch.second.empty(); });
+    std::erase_if(_shadowBatches, [](const auto& batch) { return batch.second.empty(); });
 }
 
 void Core::DrawGeometry(VkCommandBuffer cmd)
@@ -1679,73 +1980,9 @@ void Core::DrawGeometry(VkCommandBuffer cmd)
 
     // ECS Batch Rendering
     {
-        auto t0 = Clock::now();
-        for (auto& [key, instances] : _batches) {
-            instances.clear();
-        }
-
-        // exclude entities that are not meant for batch rendering
-        auto registryView = _registry.view<MeshComponent, Transform>(entt::exclude<SingleRenderTag, EffectMeshComponent, DisabledEntityTag>);
-
-        for (auto entity : registryView) {
-            if (IsEntityDisabled(_registry, entity)) {
-                continue;
-            }
-
-            auto& meshComponent = registryView.get<MeshComponent>(entity);
-            auto& trans = registryView.get<Transform>(entity);
-
-            if (!meshComponent.mesh || meshComponent.mesh->surfaces.empty())
-                continue;
-
-            auto& surface = meshComponent.mesh->surfaces[0];
-            auto* material = ResolveMeshMaterial(meshComponent, surface);
-            if (isTransparentMaterial(material)) {
-                continue;
-            }
-
-            RenderPipelineId pipelineId = ResolveEditorWireframePipeline(_instancedMeshPipelineId);
-            if (material && material->pipelines.instanced.IsValid()) {
-                pipelineId =
-                    _editorWireframeEnabled && material->pipelines.wireframeInstanced.IsValid()
-                        ? material->pipelines.wireframeInstanced
-                        : material->pipelines.instanced;
-            }
-
-            InstanceData instance{};
-            instance.position = trans.position;
-            instance.rotation = trans.rotation;
-            instance.scale = trans.scale;
-            instance.baseColorFactor = meshComponent.baseColorFactor;
-            instance.flashColorAndAmount = ResolveMeshFlash(_registry, entity);
-            instance.corruptionColorAndAmount = ResolveMeshCorruptionColor(_registry, entity);
-            instance.corruptionParams = ResolveMeshCorruptionParams(_registry, entity);
-
-            auto& batch = _batches[MeshBatchKey{
-                .mesh = meshComponent.mesh.get(),
-                .material = material,
-                .pipelineId = pipelineId
-            }];
-            if (batch.capacity() == 0) {
-                batch.reserve(128);
-            }
-
-            batch.push_back(instance);
-        }
-
-        for (auto batchIt = _batches.begin(); batchIt != _batches.end();)
-        {
-            if (batchIt->second.empty()) {
-                batchIt = _batches.erase(batchIt);
-            }
-            else {
-                ++batchIt;
-            }
-        }
-
-        auto t1 = Clock::now();
-
-        size_t offset = 0; // starting point in the instance buffer
+        // Shadow instances occupy the first segment because both passes are
+        // recorded before the shared mapped buffer is submitted to the GPU.
+        size_t offset = _shadowInstanceBytesUsed;
         RenderPipelineId boundInstancedPipelineId;
         for (auto& [key, instances] : _batches) {
             auto* mesh = key.mesh;
@@ -1833,8 +2070,6 @@ void Core::DrawGeometry(VkCommandBuffer cmd)
                 instances.data(),
                 dataSize);
 
-            auto t2 = Clock::now();
-
             // Save GPU device address for push constants
             VkDeviceAddress instanceAddress = _instanceBuffer.deviceAddress + offset;
 
@@ -1863,12 +2098,6 @@ void Core::DrawGeometry(VkCommandBuffer cmd)
                             0);
 
             offset += dataSize; // move pointer for the next batch
-            auto t3 = Clock::now();
-            auto ms = [](auto a, auto b) {
-                return std::chrono::duration<float, std::milli>(b - a).count();
-            };
-            //printf("Build: %.2f ms | Upload: %.2f ms | Record: %.2f ms\n",
-            //ms(t0,t1), ms(t1,t2), ms(t2,t3));
         }
     }
 
@@ -2247,29 +2476,9 @@ glm::mat4 Core::BuildSunLightViewProjection()
     const float radius = glm::max(_shadowOrthoRadius, 1.0f);
     float depthRadius = glm::max(_shadowDepthRadius, radius * 2.0f);
 
-    auto meshView = _registry.view<MeshComponent, Transform>(entt::exclude<EffectMeshComponent, DisabledEntityTag>);
-    for (auto entity : meshView) {
-        if (IsEntityDisabled(_registry, entity)) {
-            continue;
-        }
-
-        const auto& mesh = meshView.get<MeshComponent>(entity);
-        if (!mesh.mesh || mesh.mesh->surfaces.empty()) {
-            continue;
-        }
-        if (auto* material = ResolveMeshMaterial(mesh, mesh.mesh->surfaces[0]);
-            material && material->passType == MaterialPass::Transparent) {
-            continue;
-        }
-
-        const auto& transform = meshView.get<Transform>(entity);
-        const glm::vec3 absScale = glm::abs(transform.scale);
-        const float maxScale = glm::max(absScale.x, glm::max(absScale.y, absScale.z));
-        const glm::vec3 scaledLocalCenter = mesh.mesh->boundsCenter * transform.scale;
-        const glm::vec3 worldCenter =
-            transform.position +
-            transform.rotation * scaledLocalCenter;
-        const float worldRadius = mesh.mesh->boundsRadius * maxScale;
+    for (const glm::vec4& bounds : _opaqueRenderBounds) {
+        const glm::vec3 worldCenter = glm::vec3(bounds);
+        const float worldRadius = bounds.w;
         const float distanceAlongLight =
             glm::abs(glm::dot(worldCenter - center, lightDirection)) +
             worldRadius;
@@ -2298,6 +2507,7 @@ glm::mat4 Core::BuildSunLightViewProjection()
 
 void Core::DrawShadowMap(VkCommandBuffer cmd)
 {
+    _shadowInstanceBytesUsed = 0;
     if (_shadowPipeline == VK_NULL_HANDLE ||
         _shadowPipelineLayout == VK_NULL_HANDLE ||
         _shadowMapImage.image == VK_NULL_HANDLE) {
@@ -2349,33 +2559,22 @@ void Core::DrawShadowMap(VkCommandBuffer cmd)
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, _shadowPipeline);
 
-    auto meshView = _registry.view<MeshComponent, Transform>(entt::exclude<EffectMeshComponent, DisabledEntityTag>);
-    for (auto entity : meshView) {
-        if (IsEntityDisabled(_registry, entity)) {
+    size_t offset = 0;
+    for (const auto& [meshAssetPtr, instances] : _shadowBatches) {
+        if (!meshAssetPtr || meshAssetPtr->surfaces.empty() || instances.empty()) {
             continue;
         }
 
-        auto& meshComponent = meshView.get<MeshComponent>(entity);
-        auto& transformComponent = meshView.get<Transform>(entity);
+        const size_t dataSize = instances.size() * sizeof(InstanceData);
+        memcpy(
+            static_cast<char*>(_instanceBuffer.info.pMappedData) + offset,
+            instances.data(),
+            dataSize);
 
-        auto meshAssetPtr = meshComponent.mesh.get();
-        if (!meshAssetPtr || meshAssetPtr->surfaces.empty()) {
-            continue;
-        }
-        if (auto* material = ResolveMeshMaterial(meshComponent, meshAssetPtr->surfaces[0]);
-            material && material->passType == MaterialPass::Transparent) {
-            continue;
-        }
-
-        glm::mat4 model =
-            glm::translate(glm::mat4(1.0f), transformComponent.position) *
-            glm::mat4_cast(transformComponent.rotation) *
-            glm::scale(glm::mat4(1.0f), transformComponent.scale);
-
-        ShadowDrawPushConstants pushConstants{};
+        ShadowBatchPushConstants pushConstants{};
         pushConstants.lightViewProjection = _sunLightViewProjection;
-        pushConstants.model = model;
         pushConstants.vertexBuffer = meshAssetPtr->meshBuffers.vertexBufferAddress;
+        pushConstants.instanceBuffer = _instanceBuffer.deviceAddress + offset;
 
         vkCmdPushConstants(
             cmd,
@@ -2385,12 +2584,24 @@ void Core::DrawShadowMap(VkCommandBuffer cmd)
             sizeof(pushConstants),
             &pushConstants);
 
-        vkCmdBindIndexBuffer(cmd, meshAssetPtr->meshBuffers.indexBuffer.buffer, 0, VK_INDEX_TYPE_UINT32);
+        vkCmdBindIndexBuffer(
+            cmd,
+            meshAssetPtr->meshBuffers.indexBuffer.buffer,
+            0,
+            VK_INDEX_TYPE_UINT32);
 
         for (const auto& surface : meshAssetPtr->surfaces) {
-            vkCmdDrawIndexed(cmd, surface.count, 1, surface.startIndex, 0, 0);
+            vkCmdDrawIndexed(
+                cmd,
+                surface.count,
+                static_cast<uint32_t>(instances.size()),
+                surface.startIndex,
+                0,
+                0);
         }
+        offset += dataSize;
     }
+    _shadowInstanceBytesUsed = offset;
 
     vkCmdEndRendering(cmd);
 

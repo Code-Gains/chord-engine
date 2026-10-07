@@ -150,10 +150,10 @@ struct LineDrawPushConstants {
     VkDeviceAddress vertexBuffer;
 };
 
-struct ShadowDrawPushConstants {
+struct ShadowBatchPushConstants {
     glm::mat4 lightViewProjection;
-    glm::mat4 model;
     VkDeviceAddress vertexBuffer;
+    VkDeviceAddress instanceBuffer;
 };
 
 struct SelectionMaskPushConstants {

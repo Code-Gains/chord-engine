@@ -578,6 +578,37 @@ public:
         {
             ImGui::TextWrapped(
                 "This entity's transform origin is used as the prefab placement point.");
+
+            auto& anchor = registry.get<PrefabPlacementAnchorComponent>(entity);
+            int rotationMode = static_cast<int>(anchor.rotationMode);
+            constexpr const char* rotationModes[] {
+                "Automatic",
+                "Preserve",
+                "Align to Placement Up"
+            };
+            if (ImGui::Combo(
+                    "Rotation Mode##PrefabPlacementAnchorRotationMode",
+                    &rotationMode,
+                    rotationModes,
+                    static_cast<int>(std::size(rotationModes)))) {
+                anchor.rotationMode = static_cast<PrefabPlacementRotationMode>(rotationMode);
+            }
+
+            ImGui::SetNextItemWidth(-1.0f);
+            if (ImGui::DragFloat(
+                    "Footprint Radius##PrefabPlacementAnchorFootprintRadius",
+                    &anchor.footprintRadius,
+                    0.1f,
+                    0.0f,
+                    100000.0f,
+                    "%.2f")) {
+                anchor.footprintRadius = std::max(0.0f, anchor.footprintRadius);
+            }
+
+            ImGui::TextDisabled(
+                "Planet placement interprets placement up as radial from the center.");
+            ImGui::TextDisabled(
+                "Footprint radius reserves surface space around generated instances.");
         }
     }
 };

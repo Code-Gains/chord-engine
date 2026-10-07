@@ -10,6 +10,28 @@
 namespace Engine {
 namespace {
 
+struct HierarchyResolveCache {
+    entt::entity parent{ entt::null };
+    Transform parentWorld;
+    Transform local;
+    Transform resolvedWorld;
+};
+
+bool TransformMatches(const Transform& first, const Transform& second)
+{
+    return
+        first.position.x == second.position.x &&
+        first.position.y == second.position.y &&
+        first.position.z == second.position.z &&
+        first.rotation.w == second.rotation.w &&
+        first.rotation.x == second.rotation.x &&
+        first.rotation.y == second.rotation.y &&
+        first.rotation.z == second.rotation.z &&
+        first.scale.x == second.scale.x &&
+        first.scale.y == second.scale.y &&
+        first.scale.z == second.scale.z;
+}
+
 glm::mat4 ComposeMatrix(const Transform& transform)
 {
     return transform.GetModelMatrix();
@@ -57,6 +79,7 @@ void ResolveEntity(
         if (hierarchy->inheritTransform) {
             hierarchy->parent = entt::null;
         }
+        registry.remove<HierarchyResolveCache>(entity);
         resolved.insert(entity);
         return;
     }
@@ -68,9 +91,28 @@ void ResolveEntity(
     }
 
     const auto& parentTransform = registry.get<Transform>(hierarchy->parent);
+    const auto* cache = registry.try_get<HierarchyResolveCache>(entity);
+    if (cache &&
+        cache->parent == hierarchy->parent &&
+        TransformMatches(cache->parentWorld, parentTransform) &&
+        TransformMatches(cache->local, hierarchy->localTransform) &&
+        TransformMatches(cache->resolvedWorld, *transform)) {
+        resolving.erase(entity);
+        resolved.insert(entity);
+        return;
+    }
+
     *transform = TransformFromMatrix(
         ComposeMatrix(parentTransform) * ComposeMatrix(hierarchy->localTransform)
     );
+    registry.emplace_or_replace<HierarchyResolveCache>(
+        entity,
+        HierarchyResolveCache {
+            hierarchy->parent,
+            parentTransform,
+            hierarchy->localTransform,
+            *transform
+        });
 
     resolving.erase(entity);
     resolved.insert(entity);

@@ -294,6 +294,23 @@ entt::entity FindCompoundAncestor(entt::registry& registry, entt::entity entity)
     return entt::null;
 }
 
+entt::entity FindOutermostCompoundAncestor(entt::registry& registry, entt::entity entity)
+{
+    entt::entity compoundAncestor = entt::null;
+    const auto* hierarchy = registry.try_get<HierarchyComponent>(entity);
+    entt::entity current = hierarchy ? hierarchy->parent : entt::null;
+    while (current != entt::null && registry.valid(current)) {
+        if (const auto* collider = registry.try_get<JoltColliderComponent>(current);
+            collider && collider->shape == JoltColliderShape::Compound) {
+            compoundAncestor = current;
+        }
+
+        const auto* parentHierarchy = registry.try_get<HierarchyComponent>(current);
+        current = parentHierarchy ? parentHierarchy->parent : entt::null;
+    }
+    return compoundAncestor;
+}
+
 bool IsDescendantOf(entt::registry& registry, entt::entity entity, entt::entity ancestor)
 {
     const auto* hierarchy = registry.try_get<HierarchyComponent>(entity);
@@ -329,48 +346,37 @@ uint64_t ConvexHullSignature(const JoltColliderComponent& collider)
     return signature;
 }
 
-uint64_t CompoundSignature(entt::registry& registry, entt::entity root)
+void AppendCompoundChildSignature(
+    entt::registry& registry,
+    entt::entity root,
+    entt::entity entity,
+    uint64_t& signature)
 {
-    uint64_t signature = 0;
     const auto& rootTransform = registry.get<Transform>(root);
     const glm::quat inverseRootRotation = glm::inverse(glm::normalize(rootTransform.rotation));
-    auto view = registry.view<Transform, JoltColliderComponent>(entt::exclude<DisabledEntityTag>);
-    for (const entt::entity entity : view) {
-        if (entity == root ||
-            IsEntityDisabled(registry, entity) ||
-            !IsDescendantOf(registry, entity, root)) {
-            continue;
-        }
-
-        const auto& collider = view.get<JoltColliderComponent>(entity);
-        if (collider.shape == JoltColliderShape::Compound) {
-            continue;
-        }
-
-        const auto& transform = view.get<Transform>(entity);
-        const glm::vec3 localPosition =
-            inverseRootRotation * (transform.position - rootTransform.position);
-        const glm::quat localRotation = glm::normalize(
-            inverseRootRotation * transform.rotation);
-        HashCombine(signature, static_cast<uint64_t>(entt::to_integral(entity)));
-        HashCombine(signature, static_cast<uint64_t>(collider.shape));
-        for (const float value : {
-                 localPosition.x, localPosition.y, localPosition.z,
-                 localRotation.w, localRotation.x, localRotation.y, localRotation.z,
-                 transform.scale.x, transform.scale.y, transform.scale.z,
-                 collider.center.x, collider.center.y, collider.center.z,
-                 collider.radius,
-                 collider.halfExtents.x, collider.halfExtents.y, collider.halfExtents.z,
-                 collider.capsuleHalfHeight,
-                 collider.cylinderHalfHeight,
-                 collider.coneHalfHeight }) {
-            HashFloat(signature, value);
-        }
-        if (collider.shape == JoltColliderShape::ConvexHull) {
-            HashCombine(signature, ConvexHullSignature(collider));
-        }
+    const auto& collider = registry.get<JoltColliderComponent>(entity);
+    const auto& transform = registry.get<Transform>(entity);
+    const glm::vec3 localPosition =
+        inverseRootRotation * (transform.position - rootTransform.position);
+    const glm::quat localRotation = glm::normalize(
+        inverseRootRotation * transform.rotation);
+    HashCombine(signature, static_cast<uint64_t>(entt::to_integral(entity)));
+    HashCombine(signature, static_cast<uint64_t>(collider.shape));
+    for (const float value : {
+             localPosition.x, localPosition.y, localPosition.z,
+             localRotation.w, localRotation.x, localRotation.y, localRotation.z,
+             transform.scale.x, transform.scale.y, transform.scale.z,
+             collider.center.x, collider.center.y, collider.center.z,
+             collider.radius,
+             collider.halfExtents.x, collider.halfExtents.y, collider.halfExtents.z,
+             collider.capsuleHalfHeight,
+             collider.cylinderHalfHeight,
+             collider.coneHalfHeight }) {
+        HashFloat(signature, value);
     }
-    return signature;
+    if (collider.shape == JoltColliderShape::ConvexHull) {
+        HashCombine(signature, ConvexHullSignature(collider));
+    }
 }
 
 JPH::RefConst<JPH::Shape> CreateCompoundShape(
@@ -576,8 +582,6 @@ void JoltPhysicsSystem::Update(float deltaTime)
     }
 
     if (_core && !_core->IsPlayMode()) {
-        RemoveStaleBodies();
-        SyncBodies();
         return;
     }
 
@@ -594,8 +598,7 @@ void JoltPhysicsSystem::FixedUpdate(float)
         return;
     }
 
-    RemoveStaleBodies();
-    SyncBodies();
+    SyncRuntimeBodies();
 }
 
 void JoltPhysicsSystem::OnPlayStart()
@@ -667,6 +670,9 @@ std::vector<JoltPhysicsSystem::ShapeHit> JoltPhysicsSystem::CollideSphereWithSta
 
 void JoltPhysicsSystem::SyncBodies()
 {
+    BuildCompoundAuthoringCache();
+    RemoveStaleBodies();
+
     auto view = _registry.view<Transform, JoltColliderComponent>(entt::exclude<DisabledEntityTag>);
     for (auto entity : view) {
         if (IsEntityDisabled(_registry, entity)) {
@@ -674,13 +680,91 @@ void JoltPhysicsSystem::SyncBodies()
             continue;
         }
 
-        if (FindCompoundAncestor(_registry, entity) != entt::null) {
+        if (_compoundOwners.contains(entity)) {
             RemoveBody(entity);
             continue;
         }
 
-        CreateOrUpdateBody(entity);
+        const auto& collider = view.get<JoltColliderComponent>(entity);
+        const uint64_t compoundSignature =
+            collider.shape == JoltColliderShape::Compound
+                ? _compoundSignatures[entity]
+                : 0;
+        CreateOrUpdateBody(entity, compoundSignature);
     }
+}
+
+void JoltPhysicsSystem::SyncRuntimeBodies()
+{
+    auto view = _registry.view<Transform, JoltColliderComponent>(
+        entt::exclude<DisabledEntityTag>);
+    if (!_compoundAuthoringCacheValid || view.size_hint() != _cachedColliderEntityCount) {
+        SyncBodies();
+        return;
+    }
+
+    for (const entt::entity entity : view) {
+        if (IsEntityDisabled(_registry, entity)) {
+            continue;
+        }
+        if (!_compoundOwners.contains(entity) && !_bodies.contains(entity)) {
+            SyncBodies();
+            return;
+        }
+    }
+
+    RemoveStaleBodies();
+    auto& bodyInterface = _physicsSystem->GetBodyInterface();
+    for (const auto& [entity, bodyIdValue] : _bodies) {
+        if (!_registry.valid(entity) ||
+            !_registry.all_of<Transform, JoltColliderComponent>(entity) ||
+            IsEntityDisabled(_registry, entity)) {
+            continue;
+        }
+
+        const auto& collider = _registry.get<JoltColliderComponent>(entity);
+        if (collider.motion != JoltBodyMotion::Kinematic) {
+            continue;
+        }
+
+        const auto& transform = _registry.get<Transform>(entity);
+        bodyInterface.SetPositionAndRotationWhenChanged(
+            JPH::BodyID{ bodyIdValue },
+            ToJoltVec3(transform.position),
+            ToJoltQuat(transform.rotation),
+            JPH::EActivation::Activate);
+    }
+}
+
+void JoltPhysicsSystem::BuildCompoundAuthoringCache()
+{
+    _compoundOwners.clear();
+    _compoundSignatures.clear();
+
+    auto view = _registry.view<Transform, JoltColliderComponent>(entt::exclude<DisabledEntityTag>);
+    _cachedColliderEntityCount = view.size_hint();
+    for (const entt::entity entity : view) {
+        if (IsEntityDisabled(_registry, entity)) {
+            continue;
+        }
+
+        const auto& collider = view.get<JoltColliderComponent>(entity);
+        const entt::entity owner = FindOutermostCompoundAncestor(_registry, entity);
+        if (owner != entt::null) {
+            _compoundOwners.emplace(entity, owner);
+            if (collider.shape != JoltColliderShape::Compound) {
+                AppendCompoundChildSignature(
+                    _registry,
+                    owner,
+                    entity,
+                    _compoundSignatures[owner]);
+            }
+        }
+        else if (collider.shape == JoltColliderShape::Compound) {
+            _compoundSignatures.try_emplace(entity, 0);
+        }
+    }
+    _compoundAuthoringCacheValid = true;
 }
 
 void JoltPhysicsSystem::RemoveStaleBodies()
@@ -690,7 +774,7 @@ void JoltPhysicsSystem::RemoveStaleBodies()
         if (_registry.valid(entity) &&
             _registry.all_of<Transform, JoltColliderComponent>(entity) &&
             !IsEntityDisabled(_registry, entity) &&
-            FindCompoundAncestor(_registry, entity) == entt::null) {
+            !_compoundOwners.contains(entity)) {
             ++iterator;
             continue;
         }
@@ -729,9 +813,11 @@ void JoltPhysicsSystem::RemoveBody(entt::entity entity)
     }
 }
 
-void JoltPhysicsSystem::CreateOrUpdateBody(entt::entity entity)
+void JoltPhysicsSystem::CreateOrUpdateBody(
+    entt::entity entity,
+    uint64_t compoundSignature)
 {
-    if (!BodyMatchesAuthoring(entity)) {
+    if (!BodyMatchesAuthoring(entity, compoundSignature)) {
         RemoveBody(entity);
     }
 
@@ -792,12 +878,14 @@ void JoltPhysicsSystem::CreateOrUpdateBody(entt::entity entity)
                 ? ConvexHullSignature(collider)
                 : 0,
             collider.shape == JoltColliderShape::Compound
-                ? CompoundSignature(_registry, entity)
+                ? compoundSignature
                 : 0
         });
 }
 
-bool JoltPhysicsSystem::BodyMatchesAuthoring(entt::entity entity) const
+bool JoltPhysicsSystem::BodyMatchesAuthoring(
+    entt::entity entity,
+    uint64_t compoundSignature) const
 {
     if (!_registry.all_of<JoltBodyComponent>(entity)) {
         return false;
@@ -826,7 +914,7 @@ bool JoltPhysicsSystem::BodyMatchesAuthoring(entt::entity entity) const
                 : 0) &&
         body.compoundSignature == (
             collider.shape == JoltColliderShape::Compound
-                ? CompoundSignature(_registry, entity)
+                ? compoundSignature
                 : 0);
 }
 

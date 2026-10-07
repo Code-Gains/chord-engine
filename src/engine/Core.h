@@ -74,6 +74,33 @@ struct BenchmarkOptions {
     int measuredFrames = 1200;
 };
 
+struct GpuFrameTimings {
+    double shadowMs = 0.0;
+    double geometryMs = 0.0;
+    double postProcessMs = 0.0;
+    double finalCopyAndUiMs = 0.0;
+    double totalMs = 0.0;
+    uint64_t serial = 0;
+    bool valid = false;
+};
+
+struct CpuDrawTimings {
+    double fenceWaitMs = 0.0;
+    double setupAndAcquireMs = 0.0;
+    double commandRecordingMs = 0.0;
+    double queueSubmitMs = 0.0;
+    double presentMs = 0.0;
+    double totalMs = 0.0;
+};
+
+struct CpuRecordTimings {
+    double shadowMs = 0.0;
+    double sceneSetupMs = 0.0;
+    double geometryMs = 0.0;
+    double postProcessMs = 0.0;
+    double finalCopyAndUiMs = 0.0;
+};
+
 // ============================================================================
 // Render data / GPU structs
 // ============================================================================
@@ -239,9 +266,19 @@ struct FrameData {
     VkFence _renderFence;
     DeletionQueue _deletionQueue;
     DescriptorAllocatorGrowable _frameDescriptors;
+    bool _gpuQueriesReady = false;
 };
 
 constexpr unsigned int FRAME_OVERLAP = 2; // Swapchain image count? TODO
+constexpr uint32_t GPU_TIMESTAMP_QUERY_COUNT = 5;
+
+enum GpuTimestampQuery : uint32_t {
+    GpuTimestampFrameBegin = 0,
+    GpuTimestampShadowEnd,
+    GpuTimestampGeometryEnd,
+    GpuTimestampPostProcessEnd,
+    GpuTimestampFrameEnd
+};
 
 // ============================================================================
 // Asset helpers
@@ -445,6 +482,7 @@ private:
     void DrawUi();
 
     void DrawBackground(VkCommandBuffer cmd);
+      void BuildRenderQueues();
     void DrawGeometry(VkCommandBuffer cmd);
     void DrawEffectMeshes(
         VkCommandBuffer cmd,
@@ -553,6 +591,7 @@ private:
     AllocatedImage _errorCheckerboardImage;
     std::vector<std::shared_ptr<AllocatedImage>> _loadedImages;
     std::unordered_map<std::string, std::shared_ptr<AllocatedImage>> _uiImages;
+    std::unordered_map<std::string, std::shared_ptr<AllocatedImage>> _runtimeCubemaps;
 
     VkSampler _defaultSamplerLinear;
     VkSampler _defaultSamplerNearest;
@@ -583,8 +622,14 @@ private:
     // Batched rendering
     // ------------------------------------------------------------------------
     std::unordered_map<MeshBatchKey, std::vector<InstanceData>, MeshBatchKeyHash> _batches;
+      std::unordered_map<MeshAsset*, std::vector<InstanceData>> _shadowBatches;
+      std::vector<glm::vec4> _opaqueRenderBounds;
     AllocatedBuffer _instanceBuffer;
+      size_t _shadowInstanceBytesUsed = 0;
     float _timestampPeriod = 0.0f;
+    GpuFrameTimings _latestGpuTimings;
+    CpuDrawTimings _latestCpuDrawTimings;
+    CpuRecordTimings _latestCpuRecordTimings;
 
     // ------------------------------------------------------------------------
     // Screenshot capture
@@ -739,6 +784,10 @@ public:
     );
 
     AllocatedImage* LoadUiImage(const std::filesystem::path& path);
+    AllocatedImage* CreateOrUpdateRuntimeCubemapRgba8(
+        std::string key,
+        uint32_t faceSize,
+        std::span<const std::uint8_t> rgbaFaces);
     bool SetSkyboxPath(const std::filesystem::path& projectPath);
 
     // ------------------------------------------------------------------------

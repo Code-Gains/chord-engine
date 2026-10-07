@@ -861,7 +861,7 @@ void Core::InitShadowPipeline()
 
     VkPushConstantRange bufferRange{};
     bufferRange.offset = 0;
-    bufferRange.size = sizeof(ShadowDrawPushConstants);
+    bufferRange.size = sizeof(ShadowBatchPushConstants);
     bufferRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
 
     VkPipelineLayoutCreateInfo pipelineLayoutInfo = vkinit::pipeline_layout_create_info();

@@ -4,6 +4,7 @@
 #include "stb_image.h"
 
 #include <imgui_impl_vulkan.h>
+#include <cstring>
 #include <stdexcept>
 
 namespace Engine {
@@ -218,6 +219,135 @@ AllocatedImage* Core::LoadUiImage(const std::filesystem::path& path)
 
     auto [inserted, _] = _uiImages.emplace(cacheKey, std::move(loadedImage));
     return inserted->second.get();
+}
+
+AllocatedImage* Core::CreateOrUpdateRuntimeCubemapRgba8(
+    std::string key,
+    uint32_t faceSize,
+    std::span<const std::uint8_t> rgbaFaces)
+{
+    if (key.empty() || faceSize == 0) {
+        return nullptr;
+    }
+
+    const std::size_t faceByteSize =
+        static_cast<std::size_t>(faceSize) * faceSize * 4;
+    const std::size_t expectedByteSize = faceByteSize * 6;
+    if (rgbaFaces.size() != expectedByteSize) {
+        return nullptr;
+    }
+
+    AllocatedBuffer stagingBuffer = CreateBuffer(
+        expectedByteSize,
+        VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+        VMA_MEMORY_USAGE_CPU_TO_GPU);
+    std::memcpy(
+        stagingBuffer.info.pMappedData,
+        rgbaFaces.data(),
+        expectedByteSize);
+
+    AllocatedImage newCubemap{};
+    newCubemap.imageExtent = VkExtent3D{ faceSize, faceSize, 1 };
+    newCubemap.imageFormat = VK_FORMAT_R8G8B8A8_UNORM;
+    newCubemap.mipLevels = 1;
+
+    VkImageCreateInfo imageInfo{};
+    imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    imageInfo.imageType = VK_IMAGE_TYPE_2D;
+    imageInfo.format = newCubemap.imageFormat;
+    imageInfo.extent = newCubemap.imageExtent;
+    imageInfo.mipLevels = 1;
+    imageInfo.arrayLayers = 6;
+    imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+    imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+    imageInfo.usage =
+        VK_IMAGE_USAGE_TRANSFER_DST_BIT |
+        VK_IMAGE_USAGE_SAMPLED_BIT;
+    imageInfo.flags = VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
+
+    VmaAllocationCreateInfo allocationInfo{};
+    allocationInfo.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+    VK_CHECK(vmaCreateImage(
+        _allocator,
+        &imageInfo,
+        &allocationInfo,
+        &newCubemap.image,
+        &newCubemap.allocation,
+        nullptr));
+
+    ImmediateSubmit([&](VkCommandBuffer commandBuffer) {
+        VkImageSubresourceRange range{};
+        range.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        range.baseMipLevel = 0;
+        range.levelCount = 1;
+        range.baseArrayLayer = 0;
+        range.layerCount = 6;
+
+        vkutil::transition_image(
+            commandBuffer,
+            newCubemap.image,
+            VK_IMAGE_LAYOUT_UNDEFINED,
+            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            range);
+
+        std::array<VkBufferImageCopy, 6> copyRegions{};
+        for (uint32_t face = 0; face < copyRegions.size(); ++face) {
+            copyRegions[face].bufferOffset = faceByteSize * face;
+            copyRegions[face].imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            copyRegions[face].imageSubresource.mipLevel = 0;
+            copyRegions[face].imageSubresource.baseArrayLayer = face;
+            copyRegions[face].imageSubresource.layerCount = 1;
+            copyRegions[face].imageExtent = newCubemap.imageExtent;
+        }
+
+        vkCmdCopyBufferToImage(
+            commandBuffer,
+            stagingBuffer.buffer,
+            newCubemap.image,
+            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            static_cast<uint32_t>(copyRegions.size()),
+            copyRegions.data());
+
+        vkutil::transition_image(
+            commandBuffer,
+            newCubemap.image,
+            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            range);
+    });
+    DestroyBuffer(stagingBuffer);
+
+    VkImageViewCreateInfo viewInfo{};
+    viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    viewInfo.image = newCubemap.image;
+    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_CUBE;
+    viewInfo.format = newCubemap.imageFormat;
+    viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    viewInfo.subresourceRange.baseMipLevel = 0;
+    viewInfo.subresourceRange.levelCount = 1;
+    viewInfo.subresourceRange.baseArrayLayer = 0;
+    viewInfo.subresourceRange.layerCount = 6;
+    VK_CHECK(vkCreateImageView(
+        _device,
+        &viewInfo,
+        nullptr,
+        &newCubemap.imageView));
+
+    auto existing = _runtimeCubemaps.find(key);
+    if (existing != _runtimeCubemaps.end()) {
+        VK_CHECK(vkDeviceWaitIdle(_device));
+        DestroyImage(*existing->second);
+        *existing->second = newCubemap;
+        return existing->second.get();
+    }
+
+    auto image = std::make_shared<AllocatedImage>(newCubemap);
+    AllocatedImage* imageToDelete = image.get();
+    _runtimeCubemaps.emplace(std::move(key), std::move(image));
+    _mainDeletionQueue.push_function([this, imageToDelete]() {
+        DestroyImage(*imageToDelete);
+    });
+    return imageToDelete;
 }
 
 AllocatedImage Core::CreateCubemap(

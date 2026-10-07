@@ -120,7 +120,7 @@ void Core::InitQueries()
     VkQueryPoolCreateInfo qp{};
     qp.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
     qp.queryType = VK_QUERY_TYPE_TIMESTAMP;
-    qp.queryCount = 2;
+    qp.queryCount = GPU_TIMESTAMP_QUERY_COUNT;
 
     for (int i = 0; i < FRAME_OVERLAP; i++) {
         VK_CHECK(vkCreateQueryPool(_device, &qp, nullptr, &_frames[i]._gpuQueryPool));

@@ -10,6 +10,6 @@ public:
     void DrawUi() override;
 
 private:
-    bool _showColliders = true;
+    bool _showColliders = false;
     bool _drawOnlyStatic = false;
 };
