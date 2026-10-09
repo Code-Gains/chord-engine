@@ -266,6 +266,7 @@ struct FrameData {
     VkFence _renderFence;
     DeletionQueue _deletionQueue;
     DescriptorAllocatorGrowable _frameDescriptors;
+    AllocatedBuffer _instanceBuffer {};
     bool _gpuQueriesReady = false;
 };
 
@@ -624,7 +625,6 @@ private:
     std::unordered_map<MeshBatchKey, std::vector<InstanceData>, MeshBatchKeyHash> _batches;
       std::unordered_map<MeshAsset*, std::vector<InstanceData>> _shadowBatches;
       std::vector<glm::vec4> _opaqueRenderBounds;
-    AllocatedBuffer _instanceBuffer;
       size_t _shadowInstanceBytesUsed = 0;
     float _timestampPeriod = 0.0f;
     GpuFrameTimings _latestGpuTimings;

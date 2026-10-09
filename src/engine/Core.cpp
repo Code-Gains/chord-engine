@@ -591,11 +591,14 @@ void Core::InitPipelines()
     InitBackgroundPipelines();
 
     size_t maxInstances = 1000000; // upper bound
-    _instanceBuffer = CreateBuffer(
-        sizeof(InstanceData) * maxInstances,
-        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-        VMA_MEMORY_USAGE_CPU_TO_GPU
-    );
+    // Each frame owns its uploads until its render fence signals.
+    for (auto& frame : _frames) {
+        frame._instanceBuffer = CreateBuffer(
+            sizeof(InstanceData) * maxInstances,
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+            VMA_MEMORY_USAGE_CPU_TO_GPU
+        );
+    }
 
     InitBRDFLUTPipeline();
     InitIrradiancePipeline();
@@ -1825,6 +1828,7 @@ void Core::BuildRenderQueues()
 
 void Core::DrawGeometry(VkCommandBuffer cmd)
 {
+    auto& instanceBuffer = GetCurrentFrame()._instanceBuffer;
     auto cameraEntity = ResolveRenderCameraEntity();
     if (cameraEntity == entt::null || !_registry.valid(cameraEntity) || !_registry.all_of<Camera, Transform>(cameraEntity)) {
         return;
@@ -2066,12 +2070,12 @@ void Core::DrawGeometry(VkCommandBuffer cmd)
             size_t dataSize = instances.size() * sizeof(InstanceData);
 
             // Copy CPU-side instances into the persistently mapped GPU buffer
-            memcpy(static_cast<char*>(_instanceBuffer.info.pMappedData) + offset,
+            memcpy(static_cast<char*>(instanceBuffer.info.pMappedData) + offset,
                 instances.data(),
                 dataSize);
 
             // Save GPU device address for push constants
-            VkDeviceAddress instanceAddress = _instanceBuffer.deviceAddress + offset;
+            VkDeviceAddress instanceAddress = instanceBuffer.deviceAddress + offset;
 
             // Push constants per mesh
             BatchDrawPushConstants pc{};
@@ -2507,6 +2511,7 @@ glm::mat4 Core::BuildSunLightViewProjection()
 
 void Core::DrawShadowMap(VkCommandBuffer cmd)
 {
+    auto& instanceBuffer = GetCurrentFrame()._instanceBuffer;
     _shadowInstanceBytesUsed = 0;
     if (_shadowPipeline == VK_NULL_HANDLE ||
         _shadowPipelineLayout == VK_NULL_HANDLE ||
@@ -2567,14 +2572,14 @@ void Core::DrawShadowMap(VkCommandBuffer cmd)
 
         const size_t dataSize = instances.size() * sizeof(InstanceData);
         memcpy(
-            static_cast<char*>(_instanceBuffer.info.pMappedData) + offset,
+            static_cast<char*>(instanceBuffer.info.pMappedData) + offset,
             instances.data(),
             dataSize);
 
         ShadowBatchPushConstants pushConstants{};
         pushConstants.lightViewProjection = _sunLightViewProjection;
         pushConstants.vertexBuffer = meshAssetPtr->meshBuffers.vertexBufferAddress;
-        pushConstants.instanceBuffer = _instanceBuffer.deviceAddress + offset;
+        pushConstants.instanceBuffer = instanceBuffer.deviceAddress + offset;
 
         vkCmdPushConstants(
             cmd,
@@ -3776,6 +3781,7 @@ void Core::Shutdown() { // todo move things out to deletion queues on creation i
         vkDestroyFence(_device, _frames[i]._renderFence, nullptr);
         // deletion queuq
         _frames[i]._deletionQueue.flush();
+        DestroyBuffer(_frames[i]._instanceBuffer);
     }
     // 2 destroy semaphores
     for (int i = 0; i < FRAME_OVERLAP; i++) {
@@ -3789,7 +3795,6 @@ void Core::Shutdown() { // todo move things out to deletion queues on creation i
     // 3 destroy main deletion queue
     CleanupDrawImageDescriptors();
     CleanupDrawImages();
-    DestroyBuffer(_instanceBuffer);
     _mainDeletionQueue.flush();
 
     // 4 destroy swapchain images
