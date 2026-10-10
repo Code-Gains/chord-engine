@@ -21,6 +21,40 @@
       "problemMatcher": ["$gcc"]
     },
     {
+      "label": "build-editor-release",
+      "type": "shell",
+      "command": "cmake",
+      "args": [
+        "--build",
+        "build-release",
+        "--target",
+        "editor"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "group": "build",
+      "problemMatcher": ["$gcc"],
+      "dependsOn": ["configure-release-windows"]
+    },
+    {
+      "label": "build-and-run-editor-release",
+      "type": "shell",
+      "command": "cmake",
+      "args": [
+        "--build",
+        "build-release",
+        "--target",
+        "run-editor"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "group": "build",
+      "problemMatcher": ["$gcc"],
+      "dependsOn": ["configure-release-windows"]
+    },
+    {
       "label": "configure-release-windows",
       "type": "shell",
       "command": "cmake",
@@ -28,7 +62,7 @@
         "-S",
         ".",
         "-B",
-        "build",
+        "build-release",
         "-G",
         "Ninja",
         "-DCMAKE_BUILD_TYPE=Release",
@@ -105,6 +139,23 @@
       },
       "group": "build",
       "problemMatcher": ["$gcc"]
+    },
+    {
+      "label": "build-and-run-simulation-release",
+      "type": "shell",
+      "command": "cmake",
+      "args": [
+        "--build",
+        "build-release",
+        "--target",
+        "run-simulation"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "group": "build",
+      "problemMatcher": ["$gcc"],
+      "dependsOn": ["configure-release-windows"]
     },
     {
       "label": "recompile-engine-shaders",
