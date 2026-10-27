@@ -62,6 +62,7 @@ void Core::InitDescriptors()
         DescriptorLayoutBuilder builder;
 
         builder.AddBinding(0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);
+        builder.AddBinding(1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER); // optional material surface paint
 
         _gpuSceneDataDescriptorLayout =
             builder.Build(

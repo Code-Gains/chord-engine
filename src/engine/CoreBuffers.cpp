@@ -100,6 +100,7 @@ std::shared_ptr<MeshAsset> Core::CreateRuntimeMesh(
 
     auto mesh = std::make_shared<MeshAsset>();
     mesh->name = std::move(name);
+    mesh->runtimeVertexCount = vertices.size();
     mesh->surfaces.push_back(GeoSurface {
         0,
         static_cast<uint32_t>(indices.size()),
@@ -136,5 +137,37 @@ std::shared_ptr<MeshAsset> Core::CreateRuntimeMesh(
     });
 
     return mesh;
+}
+bool Core::UpdateRuntimeMeshVertices(MeshAsset &mesh, std::span<const Vertex> vertices)
+{
+    const auto bytes = vertices.size_bytes();
+    if (vertices.empty() || vertices.size() != mesh.runtimeVertexCount || !mesh.meshBuffers.vertexBuffer.buffer ||
+        bytes > mesh.meshBuffers.vertexBuffer.info.size)
+        return false;
+    auto staging = CreateBuffer(bytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VMA_MEMORY_USAGE_CPU_ONLY);
+    memcpy(staging.info.pMappedData, vertices.data(), bytes);
+    vmaFlushAllocation(_allocator, staging.allocation, 0, bytes);
+    ImmediateSubmit([&](VkCommandBuffer cmd) {
+        VkMemoryBarrier barrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+        barrier.srcAccessMask = VK_ACCESS_MEMORY_READ_BIT;
+        barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
+                             1, &barrier, 0, nullptr, 0, nullptr);
+        VkBufferCopy copy{0, 0, bytes};
+        vkCmdCopyBuffer(cmd, staging.buffer, mesh.meshBuffers.vertexBuffer.buffer, 1, &copy);
+        barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_VERTEX_SHADER_BIT, 0,
+                             1, &barrier, 0, nullptr, 0, nullptr);
+    });
+    DestroyBuffer(staging);
+    glm::vec3 minimum(std::numeric_limits<float>::max()), maximum(std::numeric_limits<float>::lowest());
+    mesh.pickingPositions.clear();
+    for (const auto &v : vertices) { minimum = glm::min(minimum, v.position); maximum = glm::max(maximum, v.position); }
+    mesh.boundsCenter = (minimum + maximum) * .5f;
+    mesh.boundsRadius = std::max(.01f, glm::length(maximum - mesh.boundsCenter));
+    if (_retainCpuMeshPickingData)
+        for (const auto &v : vertices) mesh.pickingPositions.push_back(v.position);
+    return true;
 }
 } // end of namespace engine

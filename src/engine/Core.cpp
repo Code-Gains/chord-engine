@@ -1,6 +1,7 @@
 #include <chrono>
 #include <cmath>
 #include "Core.h"
+#include "SurfacePaint.h"
 //#include "VkInit.h"
 #include "vk_initializers.h"
 #include "vk_images.h"
@@ -1815,6 +1816,7 @@ void Core::BuildRenderQueues()
         }
 
         InstanceData instance{};
+        instance.surfacePaintReceiver = SurfacePaintReceiverId(entity);
         instance.position = transform.position;
         instance.rotation = transform.rotation;
         instance.scale = transform.scale;
@@ -1950,6 +1952,13 @@ void Core::DrawGeometry(VkCommandBuffer cmd)
 
     DescriptorWriter writer;
     writer.write_buffer(0, gpuSceneDataBuffer.buffer, sizeof(GPUSceneData), 0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);
+    const auto paintData = PackSurfacePaint(_registry);
+    const auto paintBytes = paintData.size() * sizeof(glm::uvec4);
+    auto paintBuffer = CreateBuffer(paintBytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU);
+    memcpy(paintBuffer.info.pMappedData, paintData.data(), paintBytes);
+    vmaFlushAllocation(_allocator, paintBuffer.allocation, 0, paintBytes);
+    GetCurrentFrame()._deletionQueue.push_function([=, this]() { DestroyBuffer(paintBuffer); });
+    writer.write_buffer(1, paintBuffer.buffer, paintBytes, 0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
     writer.update_set(_device, globalDescriptor);
 
     VkClearValue colorClear{};
@@ -2266,6 +2275,7 @@ void Core::DrawGeometry(VkCommandBuffer cmd)
         glm::mat4 model = T * R * S;
 
         GPUDrawPushConstants push_constants;
+        push_constants.surfacePaintReceiver = SurfacePaintReceiverId(entity);
         push_constants.vertexBuffer = meshAssetPtr->meshBuffers.vertexBufferAddress;
         push_constants.model = model;
         push_constants.viewProjection = projectionMatrix * viewMatrix;
@@ -2390,6 +2400,7 @@ void Core::DrawGeometry(VkCommandBuffer cmd)
             glm::scale(glm::mat4(1.0f), transformComponent.scale);
 
         GPUDrawPushConstants pushConstants{};
+        pushConstants.surfacePaintReceiver = SurfacePaintReceiverId(entity);
         pushConstants.vertexBuffer = meshAssetPtr->meshBuffers.vertexBufferAddress;
         pushConstants.model = model;
         pushConstants.viewProjection = projectionMatrix * viewMatrix;

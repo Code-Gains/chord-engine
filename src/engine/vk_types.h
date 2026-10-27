@@ -140,6 +140,7 @@ struct GPUDrawPushConstants {
     glm::vec4 materialEmission;
     glm::vec4 emissionOverride;
     VkDeviceAddress vertexBuffer;
+    uint32_t surfacePaintReceiver = 0;
 };
 
 struct LineVertex {

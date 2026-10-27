@@ -53,6 +53,9 @@ target_link_libraries(hierarchy-transform-tests PRIVATE EnTT)
 target_include_directories(mesh-transform-tests PRIVATE ${glm_SOURCE_DIR})
 
 add_executable(lighting-settings-tests ../../tests/LightingSettingsTests.cpp)
+add_executable(surface-paint-tests ../../tests/SurfacePaintTests.cpp)
+target_link_libraries(surface-paint-tests PRIVATE engine)
+copy_openal_runtime(surface-paint-tests)
 target_link_libraries(lighting-settings-tests PRIVATE engine)
 copy_openal_runtime(lighting-settings-tests)
 

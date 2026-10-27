@@ -31,6 +31,7 @@ struct MeshAsset {
     std::vector<uint32_t> pickingIndices;
     glm::vec3 boundsCenter{0.0f};
     float boundsRadius = 1.0f;
+    std::size_t runtimeVertexCount = 0;
 };
 
 struct MeshComponent {

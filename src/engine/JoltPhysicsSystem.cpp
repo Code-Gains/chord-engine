@@ -13,6 +13,7 @@
 #include <Jolt/Core/JobSystemThreadPool.h>
 #include <Jolt/Core/TempAllocator.h>
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
+#include <Jolt/Physics/Body/BodyFilter.h>
 #include <Jolt/Physics/Body/BodyID.h>
 #include <Jolt/Physics/Body/BodyInterface.h>
 #include <Jolt/Physics/Body/MotionType.h>
@@ -21,6 +22,8 @@
 #include <Jolt/Physics/Collision/CollisionCollectorImpl.h>
 #include <Jolt/Physics/Collision/NarrowPhaseQuery.h>
 #include <Jolt/Physics/Collision/ObjectLayer.h>
+#include <Jolt/Physics/Collision/RayCast.h>
+#include <Jolt/Physics/Collision/CastResult.h>
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
 #include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
 #include <Jolt/Physics/Collision/Shape/ConvexHullShape.h>
@@ -106,6 +109,11 @@ public:
     {
         return layer == Layers::Static;
     }
+};
+
+class SolidBodyFilter final : public JPH::BodyFilter {
+public:
+    bool ShouldCollideLocked(const JPH::Body& body) const override { return !body.IsSensor(); }
 };
 
 BroadPhaseLayerInterface& GetBroadPhaseLayerInterface()
@@ -667,6 +675,22 @@ std::vector<JoltPhysicsSystem::ShapeHit> JoltPhysicsSystem::CollideSphereWithSta
     }
 
     return hits;
+}
+
+std::optional<float> JoltPhysicsSystem::CastRayWithStatic(const glm::vec3& start, const glm::vec3& end) const
+{
+    const auto delta = end - start;
+    if (!_physicsSystem || !std::isfinite(glm::dot(start, start)) ||
+        !std::isfinite(glm::dot(end, end)) || glm::dot(delta, delta) < 1e-10f) {
+        return std::nullopt;
+    }
+    JPH::RayCastResult hit;
+    const JPH::RRayCast ray{ ToJoltVec3(start), ToJoltVec3(delta) };
+    const SolidBodyFilter solid;
+    if (_physicsSystem->GetNarrowPhaseQuery().CastRay(ray, hit, {}, GetStaticObjectLayerFilter(), solid)) {
+        return hit.mFraction;
+    }
+    return std::nullopt;
 }
 
 void JoltPhysicsSystem::SyncBodies()

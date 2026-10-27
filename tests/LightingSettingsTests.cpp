@@ -31,7 +31,9 @@ static_assert(sizeof(Engine::BatchDrawPushConstants) == 112);
 static_assert(offsetof(GPUDrawPushConstants, materialEmission) == 192);
 static_assert(offsetof(GPUDrawPushConstants, emissionOverride) == 208);
 static_assert(offsetof(GPUDrawPushConstants, vertexBuffer) == 224);
-static_assert(sizeof(GPUDrawPushConstants) == 232);
+static_assert(offsetof(GPUDrawPushConstants, surfacePaintReceiver) == 232);
+static_assert(sizeof(GPUDrawPushConstants) == 240);
+static_assert(offsetof(Engine::InstanceData, surfacePaintReceiver) == 12);
 
 void Check(bool condition, const char* message)
 {

@@ -5,6 +5,7 @@
 #include <entt/entt.hpp>
 
 #include <memory>
+#include <optional>
 #include <unordered_map>
 #include <vector>
 
@@ -40,6 +41,8 @@ public:
     std::vector<ShapeHit> CollideSphereWithStatic(
         const glm::vec3& position,
         float radius) const;
+    // Closest solid static hit as a fraction of the start-to-end segment; ignores sensors.
+    std::optional<float> CastRayWithStatic(const glm::vec3& start, const glm::vec3& end) const;
 
 private:
     void InitializeJolt();

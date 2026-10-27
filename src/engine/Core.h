@@ -133,7 +133,7 @@ struct PrefilterPushConstants {
 
 struct InstanceData {
     glm::vec3 position;
-    float pad0;         // std430 alignment
+    uint32_t surfacePaintReceiver = 0; // Uses the existing alignment word.
     glm::quat rotation; // vec4
     glm::vec3 scale;
     float pad1;
@@ -838,6 +838,8 @@ public:
         std::span<Vertex> vertices
     );
 
+    // Reuse fixed-topology runtime geometry. Synchronous upload for infrequent surface updates.
+    bool UpdateRuntimeMeshVertices(MeshAsset &mesh, std::span<const Vertex> vertices);
     AllocatedImage* LoadUiImage(const std::filesystem::path& path);
     AllocatedImage* CreateRuntimeUiImageRgba8(std::string key, uint32_t width, uint32_t height,
                                            std::span<const std::uint8_t> rgba);
